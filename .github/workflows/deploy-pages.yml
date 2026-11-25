@@ -39,7 +39,7 @@ jobs:
 
       - name: Prepare optional Firebase applet config
         env:
-          FIREBASE_APPLET_CONFIG: ${{ secrets.FIREBASE_APPLET_CONFIG }}
+          FIREBASE_APPLET_CONFIG: ${{ secrets.FIREBASE_APPLET_CONFIG || vars.FIREBASE_APPLET_CONFIG }}
         run: |
           if [ -n "$FIREBASE_APPLET_CONFIG" ] && [ ! -f firebase-applet-config.json ]; then
             printf '%s' "$FIREBASE_APPLET_CONFIG" > firebase-applet-config.json
