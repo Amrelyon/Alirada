@@ -1,0 +1,966 @@
+rules_version = '2';
+service cloud.firestore {
+  match /databases/{database}/documents {
+
+    // 1. Global Safety Net
+    match /{document=**} {
+      allow read, write: if false;
+    }
+
+    // 2. Reusable Hardened Primitives
+    function isValidId(id) {
+      return id is string && id.size() >= 1 && id.size() <= 128 && id.matches('^[a-zA-Z0-9_\\-]+$');
+    }
+
+    function incoming() {
+      return request.resource.data;
+    }
+
+    function existing() {
+      return resource.data;
+    }
+
+    function isSignedIn() {
+      return request.auth != null;
+    }
+
+    function isVerifiedSignedIn() {
+      return isSignedIn() && request.auth.token.email_verified == true;
+    }
+
+    function isRootAdmin() {
+      return isVerifiedSignedIn() && request.auth.token.email == 'amrelyon@gmail.com';
+    }
+
+    function isAdmin() {
+      return isRootAdmin() || (
+        isVerifiedSignedIn() &&
+        exists(/databases/$(database)/documents/admins/$(request.auth.uid))
+      );
+    }
+
+    function isOwner(uid) {
+      return isVerifiedSignedIn() && request.auth.uid == uid;
+    }
+
+    function isNonEmptyStr(val, maxLen) {
+      return val is string && val.size() >= 1 && val.size() <= maxLen;
+    }
+
+    function isOptStr(val, maxLen) {
+      return val is string && val.size() <= maxLen;
+    }
+
+    // 3. Entity Validation Blueprints
+    function isValidProfile(data) {
+      return data.keys().hasAll([
+          'uid', 'universal_id', 'full_name', 'entity_type', 'country', 'city',
+          'profile_image_url', 'image_verified_status', 'user_status',
+          'penalty_score', 'carried_balance', 'absent_period_days', 'createdAt', 'updatedAt'
+        ]) &&
+        data.keys().hasOnly([
+          'uid', 'universal_id', 'full_name', 'entity_type', 'country', 'city',
+          'profile_image_url', 'image_verified_status', 'user_status',
+          'penalty_score', 'carried_balance', 'absent_period_days', 'last_active_at',
+          'createdAt', 'updatedAt'
+        ]) &&
+        isValidId(data.uid) &&
+        isNonEmptyStr(data.universal_id, 32) && data.universal_id.matches('^UID-[0-9]+$') &&
+        isNonEmptyStr(data.full_name, 120) &&
+        data.entity_type in ['Individual', 'Family', 'Organization', 'Governmental', 'Charity / Vulnerable Entity'] &&
+        isOptStr(data.country, 80) &&
+        isOptStr(data.city, 80) &&
+        isNonEmptyStr(data.profile_image_url, 512) &&
+        data.image_verified_status in ['Pending', 'Verified', 'Flagged'] &&
+        data.user_status in ['Active', 'Warning', 'Frozen', 'Blocked'] &&
+        data.penalty_score is number && data.penalty_score >= 0 &&
+        data.carried_balance is number &&
+        data.absent_period_days is int && data.absent_period_days >= 30 && data.absent_period_days <= 3650 &&
+        (!('last_active_at' in data) || isOptStr(data.last_active_at, 64)) &&
+        data.createdAt is timestamp &&
+        data.updatedAt is timestamp;
+    }
+
+    function isValidProfilePrivate(data) {
+      return data.keys().hasAll(['uid', 'email', 'evidence_approved', 'createdAt', 'updatedAt']) &&
+        data.keys().hasOnly([
+          'uid', 'email', 'contact_info', 'registration_evidence', 'evidence_approved',
+          'security_question', 'security_answer_hash', 'block_reason', 'freeze_until',
+          'successor_email', 'legacy_beneficiaries', 'charity_grant_config', 'createdAt', 'updatedAt'
+        ]) &&
+        isValidId(data.uid) &&
+        isNonEmptyStr(data.email, 180) &&
+        (!('contact_info' in data) || isOptStr(data.contact_info, 240)) &&
+        (!('registration_evidence' in data) || isOptStr(data.registration_evidence, 512)) &&
+        data.evidence_approved is bool &&
+        (!('security_question' in data) || isOptStr(data.security_question, 240)) &&
+        (!('security_answer_hash' in data) || isOptStr(data.security_answer_hash, 256)) &&
+        (!('block_reason' in data) || isOptStr(data.block_reason, 500)) &&
+        (!('freeze_until' in data) || isOptStr(data.freeze_until, 64)) &&
+        (!('successor_email' in data) || isOptStr(data.successor_email, 180)) &&
+        (!('legacy_beneficiaries' in data) || (data.legacy_beneficiaries is list && data.legacy_beneficiaries.size() <= 20)) &&
+        (!('charity_grant_config' in data) || data.charity_grant_config is map) &&
+        data.createdAt is timestamp &&
+        data.updatedAt is timestamp;
+    }
+
+    function isValidServiceLog(data) {
+      return data.keys().hasAll([
+          'log_number', 'logged_date', 'provider_uid', 'provider_auth_uid',
+          'recipient_uid', 'service_type', 'hours', 'hardship', 'final_score',
+          'daily_exceed_flag', 'createdAt'
+        ]) &&
+        data.keys().hasOnly([
+          'log_number', 'logged_date', 'provider_uid', 'provider_auth_uid',
+          'recipient_uid', 'service_type', 'hours', 'hardship', 'final_score',
+          'evidence_link', 'google_map_link', 'notes', 'project_context',
+          'entity_type', 'created_by_delegate_id', 'daily_exceed_flag', 'createdAt'
+        ]) &&
+        isNonEmptyStr(data.log_number, 40) &&
+        isNonEmptyStr(data.logged_date, 32) &&
+        isNonEmptyStr(data.provider_uid, 32) &&
+        isValidId(data.provider_auth_uid) &&
+        isNonEmptyStr(data.recipient_uid, 32) &&
+        data.provider_uid != data.recipient_uid &&
+        isNonEmptyStr(data.service_type, 160) &&
+        data.hours is number && data.hours > 0 && data.hours <= 10 &&
+        data.hardship is int && data.hardship >= 1 && data.hardship <= 10 &&
+        data.final_score is number && data.final_score == data.hours * data.hardship &&
+        (!('evidence_link' in data) || isOptStr(data.evidence_link, 512)) &&
+        (!('google_map_link' in data) || isOptStr(data.google_map_link, 512)) &&
+        (!('notes' in data) || isOptStr(data.notes, 1000)) &&
+        (!('project_context' in data) || isOptStr(data.project_context, 240)) &&
+        (!('entity_type' in data) || isOptStr(data.entity_type, 64)) &&
+        (!('created_by_delegate_id' in data) || isOptStr(data.created_by_delegate_id, 128)) &&
+        data.daily_exceed_flag is bool &&
+        data.createdAt is timestamp;
+    }
+
+    function isValidRequestedServantLog(data) {
+      return data.keys().hasAll([
+          'request_number', 'logged_date', 'requested_servant_uid', 'requester_uid',
+          'requester_auth_uid', 'deducted_score', 'status', 'createdAt'
+        ]) &&
+        data.keys().hasOnly([
+          'request_number', 'logged_date', 'requested_servant_uid', 'requester_uid',
+          'requester_auth_uid', 'related_service_log_id', 'deducted_score',
+          'evidence_link', 'notes', 'entity_type', 'created_by_delegate_id', 'status', 'createdAt'
+        ]) &&
+        isNonEmptyStr(data.request_number, 40) &&
+        isNonEmptyStr(data.logged_date, 32) &&
+        isNonEmptyStr(data.requested_servant_uid, 32) &&
+        isNonEmptyStr(data.requester_uid, 32) &&
+        data.requested_servant_uid != data.requester_uid &&
+        isValidId(data.requester_auth_uid) &&
+        (!('related_service_log_id' in data) || isOptStr(data.related_service_log_id, 128)) &&
+        data.deducted_score is number && data.deducted_score > 0 && data.deducted_score <= 1000 &&
+        (!('evidence_link' in data) || isOptStr(data.evidence_link, 512)) &&
+        (!('notes' in data) || isOptStr(data.notes, 1000)) &&
+        (!('entity_type' in data) || isOptStr(data.entity_type, 64)) &&
+        (!('created_by_delegate_id' in data) || isOptStr(data.created_by_delegate_id, 128)) &&
+        data.status in ['Recorded', 'Disputed', 'Resolved'] &&
+        data.createdAt is timestamp;
+    }
+
+    function isValidRecognitionVote(data) {
+      return data.keys().hasAll([
+          'target_uid', 'recognizer_uid', 'recognizer_auth_uid', 'direction', 'comment', 'createdAt', 'updatedAt'
+        ]) &&
+        data.keys().hasOnly([
+          'target_uid', 'recognizer_uid', 'recognizer_auth_uid', 'direction', 'comment', 'createdAt', 'updatedAt'
+        ]) &&
+        isNonEmptyStr(data.target_uid, 32) &&
+        isNonEmptyStr(data.recognizer_uid, 32) &&
+        data.target_uid != data.recognizer_uid &&
+        isValidId(data.recognizer_auth_uid) &&
+        data.direction in ['UPWARD', 'COMPENSATE'] &&
+        isNonEmptyStr(data.comment, 500) &&
+        data.createdAt is timestamp &&
+        data.updatedAt is timestamp;
+    }
+
+    function isValidListing(data) {
+      return data.keys().hasAll([
+          'listing_code', 'owner_uid', 'owner_auth_uid', 'listing_type', 'title',
+          'category', 'description', 'price_points', 'payment_model', 'obligation_status', 'createdAt', 'updatedAt'
+        ]) &&
+        data.keys().hasOnly([
+          'listing_code', 'owner_uid', 'owner_auth_uid', 'listing_type', 'title',
+          'category', 'description', 'delivery_method', 'location', 'google_map_link',
+          'contact_info', 'image_urls', 'video_url', 'evidence_link', 'price_points',
+          'payment_model', 'end_date', 'investment_goal_points', 'budget_doc_url',
+          'presentation_url', 'entity_type', 'availability_status', 'obligation_status', 'createdAt', 'updatedAt'
+        ]) &&
+        isNonEmptyStr(data.listing_code, 40) &&
+        isNonEmptyStr(data.owner_uid, 32) &&
+        isValidId(data.owner_auth_uid) &&
+        data.listing_type in ['Product', 'Service', 'Course'] &&
+        isNonEmptyStr(data.title, 160) &&
+        isNonEmptyStr(data.category, 100) &&
+        isNonEmptyStr(data.description, 2000) &&
+        (!('delivery_method' in data) || isOptStr(data.delivery_method, 100)) &&
+        (!('location' in data) || isOptStr(data.location, 160)) &&
+        (!('google_map_link' in data) || isOptStr(data.google_map_link, 512)) &&
+        (!('contact_info' in data) || isOptStr(data.contact_info, 200)) &&
+        (!('image_urls' in data) || (data.image_urls is list && data.image_urls.size() <= 10 && (data.image_urls.size() == 0 || data.image_urls[0] is string))) &&
+        (!('video_url' in data) || isOptStr(data.video_url, 512)) &&
+        (!('evidence_link' in data) || isOptStr(data.evidence_link, 512)) &&
+        data.price_points is number && data.price_points >= 0 &&
+        data.payment_model in ['One-Time', 'Monthly Installment', 'Monthly Subscription'] &&
+        (!('end_date' in data) || isOptStr(data.end_date, 32)) &&
+        (!('investment_goal_points' in data) || (data.investment_goal_points is number && data.investment_goal_points >= 0)) &&
+        (!('budget_doc_url' in data) || isOptStr(data.budget_doc_url, 512)) &&
+        (!('presentation_url' in data) || isOptStr(data.presentation_url, 512)) &&
+        (!('entity_type' in data) || isOptStr(data.entity_type, 64)) &&
+        (!('availability_status' in data) || data.availability_status in ['Funding', 'Active']) &&
+        data.obligation_status in ['None', 'HasObligations'] &&
+        data.createdAt is timestamp &&
+        data.updatedAt is timestamp;
+    }
+
+    function isValidProject(data) {
+      return data.keys().hasAll([
+          'project_code', 'owner_uid', 'owner_auth_uid', 'name', 'category',
+          'description', 'visibility', 'obligation_status', 'createdAt', 'updatedAt'
+        ]) &&
+        data.keys().hasOnly([
+          'project_code', 'owner_uid', 'owner_auth_uid', 'elected_ceo_uid', 'name',
+          'category', 'description', 'visibility', 'location', 'google_map_link',
+          'contact_info', 'image_urls', 'video_url', 'evidence_link', 'entity_type',
+          'delegates', 'members', 'join_requests', 'obligation_status', 'createdAt', 'updatedAt'
+        ]) &&
+        isNonEmptyStr(data.project_code, 40) &&
+        isNonEmptyStr(data.owner_uid, 32) &&
+        isValidId(data.owner_auth_uid) &&
+        (!('elected_ceo_uid' in data) || isOptStr(data.elected_ceo_uid, 32)) &&
+        isNonEmptyStr(data.name, 160) &&
+        isNonEmptyStr(data.category, 100) &&
+        isNonEmptyStr(data.description, 2000) &&
+        data.visibility in ['Public', 'Private'] &&
+        (!('location' in data) || isOptStr(data.location, 160)) &&
+        (!('google_map_link' in data) || isOptStr(data.google_map_link, 512)) &&
+        (!('contact_info' in data) || isOptStr(data.contact_info, 200)) &&
+        (!('image_urls' in data) || (data.image_urls is list && data.image_urls.size() <= 10)) &&
+        (!('video_url' in data) || isOptStr(data.video_url, 512)) &&
+        (!('evidence_link' in data) || isOptStr(data.evidence_link, 512)) &&
+        (!('entity_type' in data) || isOptStr(data.entity_type, 64)) &&
+        (!('delegates' in data) || (data.delegates is list && data.delegates.size() <= 50)) &&
+        (!('members' in data) || (data.members is list && data.members.size() <= 100)) &&
+        (!('join_requests' in data) || (data.join_requests is list && data.join_requests.size() <= 100)) &&
+        data.obligation_status in ['None', 'HasObligations'] &&
+        data.createdAt is timestamp &&
+        data.updatedAt is timestamp;
+    }
+
+    function isValidHierarchyItem(data) {
+      return data.keys().hasAll([
+          'task_code', 'project_id', 'creator_auth_uid', 'function_name',
+          'approval_status', 'execution_status', 'obligation_status', 'createdAt', 'updatedAt'
+        ]) &&
+        data.keys().hasOnly([
+          'task_code', 'project_id', 'creator_auth_uid', 'function_name', 'step_title',
+          'fix_title', 'description', 'video_url', 'image_url', 'doc_url',
+          'resource_links', 'estimated_cost', 'votes', 'approval_status',
+          'assigned_uids', 'hours_spent', 'hardship_rating', 'execution_status',
+          'execution_reports', 'obligation_status', 'createdAt', 'updatedAt'
+        ]) &&
+        isNonEmptyStr(data.task_code, 40) &&
+        isValidId(data.project_id) &&
+        isValidId(data.creator_auth_uid) &&
+        isNonEmptyStr(data.function_name, 160) &&
+        (!('step_title' in data) || isOptStr(data.step_title, 160)) &&
+        (!('fix_title' in data) || isOptStr(data.fix_title, 160)) &&
+        (!('description' in data) || isOptStr(data.description, 1500)) &&
+        (!('video_url' in data) || isOptStr(data.video_url, 512)) &&
+        (!('image_url' in data) || isOptStr(data.image_url, 512)) &&
+        (!('doc_url' in data) || isOptStr(data.doc_url, 512)) &&
+        (!('resource_links' in data) || (data.resource_links is list && data.resource_links.size() <= 20)) &&
+        (!('estimated_cost' in data) || (data.estimated_cost is number && data.estimated_cost >= 0)) &&
+        (!('votes' in data) || data.votes is map) &&
+        data.approval_status in ['Pending', 'Approved', 'Rejected'] &&
+        (!('assigned_uids' in data) || (data.assigned_uids is list && data.assigned_uids.size() <= 30)) &&
+        (!('hours_spent' in data) || (data.hours_spent is number && data.hours_spent >= 0)) &&
+        (!('hardship_rating' in data) || (data.hardship_rating is int && data.hardship_rating >= 1 && data.hardship_rating <= 10)) &&
+        data.execution_status in ['Open', 'In Progress', 'Executed'] &&
+        (!('execution_reports' in data) || (data.execution_reports is list && data.execution_reports.size() <= 50)) &&
+        data.obligation_status in ['None', 'HasObligations'] &&
+        data.createdAt is timestamp &&
+        data.updatedAt is timestamp;
+    }
+
+    function isValidEmploymentPosting(data) {
+      return data.keys().hasAll([
+          'job_code', 'project_id', 'poster_uid', 'poster_auth_uid',
+          'position_title', 'status', 'obligation_status', 'createdAt', 'updatedAt'
+        ]) &&
+        data.keys().hasOnly([
+          'job_code', 'project_id', 'poster_uid', 'poster_auth_uid',
+          'position_title', 'qualifications', 'tasks_summary', 'required_course_ids',
+          'location', 'status', 'applicants', 'invites', 'obligation_status', 'createdAt', 'updatedAt'
+        ]) &&
+        isNonEmptyStr(data.job_code, 40) &&
+        isValidId(data.project_id) &&
+        isNonEmptyStr(data.poster_uid, 32) &&
+        isValidId(data.poster_auth_uid) &&
+        isNonEmptyStr(data.position_title, 160) &&
+        (!('qualifications' in data) || isOptStr(data.qualifications, 1000)) &&
+        (!('tasks_summary' in data) || isOptStr(data.tasks_summary, 1000)) &&
+        (!('required_course_ids' in data) || (data.required_course_ids is list && data.required_course_ids.size() <= 20)) &&
+        (!('location' in data) || isOptStr(data.location, 160)) &&
+        data.status in ['Open', 'Filled', 'Closed'] &&
+        (!('applicants' in data) || (data.applicants is list && data.applicants.size() <= 100)) &&
+        (!('invites' in data) || (data.invites is list && data.invites.size() <= 100)) &&
+        data.obligation_status in ['None', 'HasObligations'] &&
+        data.createdAt is timestamp &&
+        data.updatedAt is timestamp;
+    }
+
+    function isValidOrder(data) {
+      return data.keys().hasAll([
+          'order_number', 'order_date', 'buyer_uid', 'buyer_auth_uid',
+          'seller_uid', 'seller_auth_uid', 'listing_id', 'listing_code', 'listing_type',
+          'quantity', 'total_points', 'payment_model', 'order_status', 'delivery_status',
+          'obligation_status', 'createdAt', 'updatedAt'
+        ]) &&
+        data.keys().hasOnly([
+          'order_number', 'order_date', 'buyer_uid', 'buyer_auth_uid',
+          'seller_uid', 'seller_auth_uid', 'listing_id', 'listing_code', 'listing_type',
+          'quantity', 'total_points', 'payment_model', 'end_date', 'google_map_link',
+          'notes', 'order_status', 'delivery_status', 'rejection_reason',
+          'trigger_type', 'trigger_payload', 'obligation_status', 'createdAt', 'updatedAt'
+        ]) &&
+        isNonEmptyStr(data.order_number, 40) &&
+        isNonEmptyStr(data.order_date, 32) &&
+        isNonEmptyStr(data.buyer_uid, 32) &&
+        isValidId(data.buyer_auth_uid) &&
+        isNonEmptyStr(data.seller_uid, 32) &&
+        isValidId(data.seller_auth_uid) &&
+        data.buyer_uid != data.seller_uid &&
+        isValidId(data.listing_id) &&
+        isNonEmptyStr(data.listing_code, 40) &&
+        data.listing_type in ['Product', 'Service', 'Course'] &&
+        data.quantity is int && data.quantity >= 1 && data.quantity <= 10000 &&
+        data.total_points is number && data.total_points >= 0 &&
+        data.payment_model in ['One-Time', 'Monthly Installment', 'Monthly Subscription'] &&
+        (!('end_date' in data) || isOptStr(data.end_date, 32)) &&
+        (!('google_map_link' in data) || isOptStr(data.google_map_link, 512)) &&
+        (!('notes' in data) || isOptStr(data.notes, 1000)) &&
+        data.order_status in ['Pending', 'Confirmed', 'Completed', 'Rejected'] &&
+        data.delivery_status in ['Awaiting', 'Delivered', 'Partially Delivered', 'Rejected'] &&
+        (!('rejection_reason' in data) || isOptStr(data.rejection_reason, 500)) &&
+        (!('trigger_type' in data) || isOptStr(data.trigger_type, 64)) &&
+        (!('trigger_payload' in data) || isOptStr(data.trigger_payload, 512)) &&
+        data.obligation_status in ['None', 'HasObligations'] &&
+        data.createdAt is timestamp &&
+        data.updatedAt is timestamp;
+    }
+
+    function isValidDelivery(data) {
+      return data.keys().hasAll([
+          'delivery_number', 'order_id', 'receiver_uid', 'receiver_auth_uid',
+          'seller_auth_uid', 'delivery_status', 'obligation_status', 'createdAt'
+        ]) &&
+        data.keys().hasOnly([
+          'delivery_number', 'order_id', 'receiver_uid', 'receiver_auth_uid',
+          'seller_auth_uid', 'delivery_evidence', 'delivery_status', 'notes',
+          'rejection_reason', 'created_by_delegate_id', 'obligation_status', 'createdAt'
+        ]) &&
+        isNonEmptyStr(data.delivery_number, 40) &&
+        isValidId(data.order_id) &&
+        isNonEmptyStr(data.receiver_uid, 32) &&
+        isValidId(data.receiver_auth_uid) &&
+        isValidId(data.seller_auth_uid) &&
+        (!('delivery_evidence' in data) || isOptStr(data.delivery_evidence, 512)) &&
+        data.delivery_status in ['Delivered', 'Partially Delivered', 'Rejected'] &&
+        (!('notes' in data) || isOptStr(data.notes, 1000)) &&
+        (!('rejection_reason' in data) || isOptStr(data.rejection_reason, 500)) &&
+        (!('created_by_delegate_id' in data) || isOptStr(data.created_by_delegate_id, 128)) &&
+        data.obligation_status in ['None', 'HasObligations'] &&
+        data.createdAt is timestamp;
+    }
+
+    function isValidInvestment(data) {
+      return data.keys().hasAll([
+          'investment_code', 'investor_uid', 'investor_auth_uid', 'listing_id',
+          'listing_code', 'target_type', 'invested_points', 'share_percentage',
+          'dividends_earned', 'status', 'obligation_status', 'createdAt', 'updatedAt'
+        ]) &&
+        data.keys().hasOnly([
+          'investment_code', 'investor_uid', 'investor_auth_uid', 'listing_id',
+          'listing_code', 'target_type', 'invested_points', 'share_percentage',
+          'budget_doc_link', 'presentation_link', 'dividends_earned', 'status',
+          'obligation_status', 'createdAt', 'updatedAt'
+        ]) &&
+        isNonEmptyStr(data.investment_code, 40) &&
+        isNonEmptyStr(data.investor_uid, 32) &&
+        isValidId(data.investor_auth_uid) &&
+        isValidId(data.listing_id) &&
+        isNonEmptyStr(data.listing_code, 40) &&
+        isNonEmptyStr(data.target_type, 48) &&
+        data.invested_points is number && data.invested_points > 0 &&
+        data.share_percentage is number && data.share_percentage >= 0 && data.share_percentage <= 100 &&
+        (!('budget_doc_link' in data) || isOptStr(data.budget_doc_link, 512)) &&
+        (!('presentation_link' in data) || isOptStr(data.presentation_link, 512)) &&
+        data.dividends_earned is number && data.dividends_earned >= 0 &&
+        data.status in ['Active', 'Returned', 'Cancelled'] &&
+        data.obligation_status in ['None', 'HasObligations'] &&
+        data.createdAt is timestamp &&
+        data.updatedAt is timestamp;
+    }
+
+    function isValidPointExchange(data) {
+      return data.keys().hasAll([
+          'exchange_code', 'seller_uid', 'seller_auth_uid', 'points_requested',
+          'cash_amount', 'currency', 'status', 'obligation_status', 'createdAt', 'updatedAt'
+        ]) &&
+        data.keys().hasOnly([
+          'exchange_code', 'buyer_uid', 'buyer_auth_uid', 'seller_uid', 'seller_auth_uid',
+          'points_requested', 'cash_amount', 'currency', 'status', 'payment_proof',
+          'notes', 'obligation_status', 'createdAt', 'updatedAt'
+        ]) &&
+        isNonEmptyStr(data.exchange_code, 40) &&
+        (!('buyer_uid' in data) || isOptStr(data.buyer_uid, 32)) &&
+        (!('buyer_auth_uid' in data) || isOptStr(data.buyer_auth_uid, 128)) &&
+        isNonEmptyStr(data.seller_uid, 32) &&
+        isValidId(data.seller_auth_uid) &&
+        data.points_requested is number && data.points_requested > 0 &&
+        data.cash_amount is number && data.cash_amount > 0 &&
+        isNonEmptyStr(data.currency, 12) &&
+        data.status in ['Open', 'Escrow Locked', 'Proof Submitted', 'Released', 'Cancelled'] &&
+        (!('payment_proof' in data) || isOptStr(data.payment_proof, 512)) &&
+        (!('notes' in data) || isOptStr(data.notes, 500)) &&
+        data.obligation_status in ['None', 'HasObligations'] &&
+        data.createdAt is timestamp &&
+        data.updatedAt is timestamp;
+    }
+
+    function isValidTransactionRef(data) {
+      return data.keys().hasAll([
+          'ref_code', 'ref_type', 'issuer_uid', 'issuer_auth_uid', 'points_amount',
+          'payment_model', 'trigger_type', 'status', 'obligation_status', 'createdAt', 'updatedAt'
+        ]) &&
+        data.keys().hasOnly([
+          'ref_code', 'ref_type', 'issuer_uid', 'issuer_auth_uid', 'counterparty_uid',
+          'counterparty_auth_uid', 'linked_listing_code', 'widget_name', 'points_amount',
+          'payment_model', 'end_date', 'description', 'trigger_type', 'trigger_payload',
+          'status', 'payer_email', 'confirmed_at', 'obligation_status', 'createdAt', 'updatedAt'
+        ]) &&
+        isNonEmptyStr(data.ref_code, 64) &&
+        data.ref_type in ['P2P', 'C2P'] &&
+        isNonEmptyStr(data.issuer_uid, 32) &&
+        isValidId(data.issuer_auth_uid) &&
+        (!('counterparty_uid' in data) || isOptStr(data.counterparty_uid, 32)) &&
+        (!('counterparty_auth_uid' in data) || isOptStr(data.counterparty_auth_uid, 128)) &&
+        (!('linked_listing_code' in data) || isOptStr(data.linked_listing_code, 40)) &&
+        (!('widget_name' in data) || isOptStr(data.widget_name, 120)) &&
+        data.points_amount is number && data.points_amount > 0 &&
+        data.payment_model in ['One-Time', 'Monthly Installment', 'Monthly Subscription'] &&
+        (!('end_date' in data) || isOptStr(data.end_date, 32)) &&
+        (!('description' in data) || isOptStr(data.description, 500)) &&
+        data.trigger_type in ['None', 'Redirect URL', 'Webhook/Notification', 'Access Grant', 'Order Creation', 'Manual Verification Request'] &&
+        (!('trigger_payload' in data) || isOptStr(data.trigger_payload, 512)) &&
+        data.status in ['Pending', 'Confirmed', 'Cancelled'] &&
+        (!('payer_email' in data) || isOptStr(data.payer_email, 180)) &&
+        (!('confirmed_at' in data) || isOptStr(data.confirmed_at, 64)) &&
+        data.obligation_status in ['None', 'HasObligations'] &&
+        data.createdAt is timestamp &&
+        data.updatedAt is timestamp;
+    }
+
+    function isValidBatchPayment(data) {
+      return data.keys().hasAll([
+          'batch_code', 'creator_uid', 'creator_auth_uid', 'batch_name',
+          'recipients', 'recurrence', 'send_count', 'status', 'obligation_status', 'createdAt', 'updatedAt'
+        ]) &&
+        data.keys().hasOnly([
+          'batch_code', 'creator_uid', 'creator_auth_uid', 'batch_name',
+          'recipients', 'scheduled_time', 'recurrence', 'notes', 'last_sent_at',
+          'send_count', 'status', 'obligation_status', 'createdAt', 'updatedAt'
+        ]) &&
+        isNonEmptyStr(data.batch_code, 40) &&
+        isNonEmptyStr(data.creator_uid, 32) &&
+        isValidId(data.creator_auth_uid) &&
+        isNonEmptyStr(data.batch_name, 160) &&
+        data.recipients is list && data.recipients.size() >= 1 && data.recipients.size() <= 100 &&
+        (!('scheduled_time' in data) || isOptStr(data.scheduled_time, 64)) &&
+        data.recurrence in ['Once', 'Weekly', 'Monthly'] &&
+        (!('notes' in data) || isOptStr(data.notes, 500)) &&
+        (!('last_sent_at' in data) || isOptStr(data.last_sent_at, 64)) &&
+        data.send_count is int && data.send_count >= 0 &&
+        data.status in ['Draft', 'Scheduled', 'Sent'] &&
+        data.obligation_status in ['None', 'HasObligations'] &&
+        data.createdAt is timestamp &&
+        data.updatedAt is timestamp;
+    }
+
+    function isValidGovernanceDelegate(data) {
+      return data.keys().hasAll([
+          'scope', 'principal_uid', 'principal_auth_uid', 'entity_name',
+          'delegate_email', 'delegated_tasks', 'ceo_votes', 'absent_period_days', 'createdAt', 'updatedAt'
+        ]) &&
+        data.keys().hasOnly([
+          'scope', 'principal_uid', 'principal_auth_uid', 'entity_name',
+          'delegate_email', 'delegate_uid', 'delegated_tasks', 'ceo_votes',
+          'successor_email', 'absent_period_days', 'createdAt', 'updatedAt'
+        ]) &&
+        data.scope in ['INSTITUTIONAL', 'PLATFORM'] &&
+        isNonEmptyStr(data.principal_uid, 32) &&
+        isValidId(data.principal_auth_uid) &&
+        isNonEmptyStr(data.entity_name, 160) &&
+        isNonEmptyStr(data.delegate_email, 180) &&
+        (!('delegate_uid' in data) || isOptStr(data.delegate_uid, 32)) &&
+        data.delegated_tasks is list && data.delegated_tasks.size() <= 30 &&
+        data.ceo_votes is list && data.ceo_votes.size() <= 100 &&
+        (!('successor_email' in data) || isOptStr(data.successor_email, 180)) &&
+        data.absent_period_days is int && data.absent_period_days >= 30 && data.absent_period_days <= 3650 &&
+        data.createdAt is timestamp &&
+        data.updatedAt is timestamp;
+    }
+
+    function isValidUserReport(data) {
+      return data.keys().hasAll([
+          'report_code', 'reporter_auth_uid', 'reporter_email', 'target_type',
+          'target_id', 'reason', 'status', 'createdAt', 'updatedAt'
+        ]) &&
+        data.keys().hasOnly([
+          'report_code', 'reporter_auth_uid', 'reporter_email', 'target_type',
+          'target_id', 'reason', 'status', 'createdAt', 'updatedAt'
+        ]) &&
+        isNonEmptyStr(data.report_code, 40) &&
+        isValidId(data.reporter_auth_uid) &&
+        isNonEmptyStr(data.reporter_email, 180) &&
+        data.target_type in ['User', 'Profile Image', 'Service Log', 'Listing', 'Order'] &&
+        isNonEmptyStr(data.target_id, 128) &&
+        isNonEmptyStr(data.reason, 1000) &&
+        data.status in ['Open', 'Reviewed', 'Actioned', 'Dismissed'] &&
+        data.createdAt is timestamp &&
+        data.updatedAt is timestamp;
+    }
+
+    function isValidSystemConfig(data) {
+      return data.keys().hasAll(['key', 'value', 'category', 'updatedAt']) &&
+        data.keys().hasOnly(['key', 'value', 'category', 'description', 'updatedAt']) &&
+        isNonEmptyStr(data.key, 64) &&
+        isNonEmptyStr(data.category, 64) &&
+        (!('description' in data) || isOptStr(data.description, 300)) &&
+        data.updatedAt is timestamp;
+    }
+
+    function isValidNotification(data) {
+      return data.keys().hasAll([
+          'actor_uid', 'target_uid', 'target_auth_uid', 'title', 'message',
+          'is_admin_alert', 'read', 'createdAt'
+        ]) &&
+        data.keys().hasOnly([
+          'actor_uid', 'target_uid', 'target_auth_uid', 'title', 'message',
+          'is_admin_alert', 'read', 'createdAt'
+        ]) &&
+        isNonEmptyStr(data.actor_uid, 32) &&
+        isNonEmptyStr(data.target_uid, 32) &&
+        isOptStr(data.target_auth_uid, 128) &&
+        isNonEmptyStr(data.title, 160) &&
+        isNonEmptyStr(data.message, 500) &&
+        data.is_admin_alert is bool &&
+        data.read is bool &&
+        data.createdAt is timestamp;
+    }
+
+    function isValidAdminDelegate(data) {
+      return data.keys().hasAll(['delegate_email', 'tasks', 'delegated_by', 'active', 'createdAt', 'updatedAt']) &&
+        data.keys().hasOnly(['delegate_email', 'delegate_uid', 'tasks', 'delegated_by', 'active', 'createdAt', 'updatedAt']) &&
+        isNonEmptyStr(data.delegate_email, 180) &&
+        (!('delegate_uid' in data) || isOptStr(data.delegate_uid, 32)) &&
+        data.tasks is list && data.tasks.size() <= 30 &&
+        data.delegated_by == 'amrelyon@gmail.com' &&
+        data.active is bool &&
+        data.createdAt is timestamp &&
+        data.updatedAt is timestamp;
+    }
+
+    // 4. Collection Rules
+
+    match /test/connection {
+      allow get: if isSignedIn();
+    }
+
+    match /admins/{adminUid} {
+      allow get: if isVerifiedSignedIn() && isValidId(adminUid) && (request.auth.uid == adminUid || isAdmin());
+      allow list: if isAdmin();
+      allow create: if isVerifiedSignedIn() && isValidId(adminUid) && (
+        isRootAdmin() ||
+        (request.auth.uid == adminUid &&
+          incoming().uid == request.auth.uid &&
+          incoming().invite_id is string &&
+          isValidId(incoming().invite_id) &&
+          exists(/databases/$(database)/documents/admin_delegates/$(incoming().invite_id)) &&
+          get(/databases/$(database)/documents/admin_delegates/$(incoming().invite_id)).data.delegate_email == request.auth.token.email &&
+          get(/databases/$(database)/documents/admin_delegates/$(incoming().invite_id)).data.active == true)
+      );
+      allow update, delete: if isRootAdmin() && isValidId(adminUid);
+    }
+
+    match /admin_delegates/{delegateId} {
+      allow get: if isVerifiedSignedIn() && isValidId(delegateId) && (isRootAdmin() || existing().delegate_email == request.auth.token.email);
+      allow list: if isVerifiedSignedIn() && (isRootAdmin() || resource.data.delegate_email == request.auth.token.email);
+      allow create: if isRootAdmin() && isValidId(delegateId) && isValidAdminDelegate(incoming()) &&
+        incoming().createdAt == request.time &&
+        incoming().updatedAt == request.time;
+      allow update: if isRootAdmin() && isValidId(delegateId) && isValidAdminDelegate(incoming()) &&
+        incoming().createdAt == existing().createdAt &&
+        incoming().updatedAt == request.time;
+      allow delete: if isRootAdmin() && isValidId(delegateId);
+    }
+
+    match /profiles/{uid} {
+      allow get: if isVerifiedSignedIn() && isValidId(uid);
+      allow list: if isVerifiedSignedIn() && (resource.data.user_status != 'Blocked' || resource.data.uid == request.auth.uid || isAdmin());
+      allow create: if isVerifiedSignedIn() && isValidId(uid) && request.auth.uid == uid &&
+        isValidProfile(incoming()) &&
+        incoming().uid == request.auth.uid &&
+        incoming().user_status == 'Active' &&
+        incoming().penalty_score == 0 &&
+        incoming().carried_balance == 0 &&
+        incoming().image_verified_status == 'Pending' &&
+        incoming().createdAt == request.time &&
+        incoming().updatedAt == request.time;
+      allow update: if isVerifiedSignedIn() && isValidId(uid) && isValidProfile(incoming()) &&
+        incoming().uid == existing().uid &&
+        incoming().universal_id == existing().universal_id &&
+        incoming().createdAt == existing().createdAt &&
+        incoming().updatedAt == request.time && (
+          isAdmin() ||
+          (isOwner(uid) && incoming().diff(existing()).affectedKeys().hasOnly([
+            'full_name', 'entity_type', 'country', 'city', 'profile_image_url',
+            'absent_period_days', 'last_active_at', 'updatedAt'
+          ]))
+        );
+      allow delete: if isAdmin() && isValidId(uid);
+    }
+
+    match /profiles_private/{uid} {
+      allow get: if isVerifiedSignedIn() && isValidId(uid) && (isOwner(uid) || isAdmin());
+      allow list: if isVerifiedSignedIn() && (resource.data.uid == request.auth.uid || isAdmin());
+      allow create: if isVerifiedSignedIn() && isValidId(uid) && request.auth.uid == uid &&
+        isValidProfilePrivate(incoming()) &&
+        incoming().uid == request.auth.uid &&
+        incoming().evidence_approved == false &&
+        incoming().createdAt == request.time &&
+        incoming().updatedAt == request.time;
+      allow update: if isVerifiedSignedIn() && isValidId(uid) && isValidProfilePrivate(incoming()) &&
+        incoming().uid == existing().uid &&
+        incoming().createdAt == existing().createdAt &&
+        incoming().updatedAt == request.time && (
+          isAdmin() ||
+          (isOwner(uid) && incoming().diff(existing()).affectedKeys().hasOnly([
+            'contact_info', 'registration_evidence', 'security_question', 'security_answer_hash',
+            'successor_email', 'legacy_beneficiaries', 'updatedAt'
+          ]))
+        );
+      allow delete: if isAdmin() && isValidId(uid);
+    }
+
+    match /service_logs/{logId} {
+      allow get: if isVerifiedSignedIn() && isValidId(logId);
+      allow list: if isVerifiedSignedIn() && resource.data.final_score >= 0;
+      allow create: if isVerifiedSignedIn() && isValidId(logId) && isValidServiceLog(incoming()) &&
+        incoming().provider_auth_uid == request.auth.uid &&
+        incoming().createdAt == request.time;
+      allow update: if isVerifiedSignedIn() && isValidId(logId) && isValidServiceLog(incoming()) &&
+        incoming().provider_auth_uid == existing().provider_auth_uid &&
+        incoming().createdAt == existing().createdAt &&
+        isAdmin();
+      allow delete: if isAdmin() && isValidId(logId);
+    }
+
+    match /requested_servant_logs/{reqId} {
+      allow get: if isVerifiedSignedIn() && isValidId(reqId);
+      allow list: if isVerifiedSignedIn() && resource.data.deducted_score >= 0;
+      allow create: if isVerifiedSignedIn() && isValidId(reqId) && isValidRequestedServantLog(incoming()) &&
+        incoming().requester_auth_uid == request.auth.uid &&
+        incoming().status == 'Recorded' &&
+        incoming().createdAt == request.time;
+      allow update: if isVerifiedSignedIn() && isValidId(reqId) && isValidRequestedServantLog(incoming()) &&
+        incoming().requester_auth_uid == existing().requester_auth_uid &&
+        incoming().createdAt == existing().createdAt &&
+        (isAdmin() || (existing().requester_auth_uid == request.auth.uid && incoming().diff(existing()).affectedKeys().hasOnly(['status', 'notes'])));
+      allow delete: if isAdmin() && isValidId(reqId);
+    }
+
+    match /recognition_votes/{voteId} {
+      allow get: if isVerifiedSignedIn() && isValidId(voteId);
+      allow list: if isVerifiedSignedIn() && resource.data.direction in ['UPWARD', 'COMPENSATE'];
+      allow create: if isVerifiedSignedIn() && isValidId(voteId) && isValidRecognitionVote(incoming()) &&
+        incoming().recognizer_auth_uid == request.auth.uid &&
+        incoming().createdAt == request.time &&
+        incoming().updatedAt == request.time;
+      allow update: if isVerifiedSignedIn() && isValidId(voteId) && isValidRecognitionVote(incoming()) &&
+        incoming().recognizer_auth_uid == existing().recognizer_auth_uid &&
+        incoming().target_uid == existing().target_uid &&
+        incoming().createdAt == existing().createdAt &&
+        incoming().updatedAt == request.time &&
+        (isAdmin() || (existing().recognizer_auth_uid == request.auth.uid && incoming().diff(existing()).affectedKeys().hasOnly(['direction', 'comment', 'updatedAt'])));
+      allow delete: if isVerifiedSignedIn() && isValidId(voteId) && (existing().recognizer_auth_uid == request.auth.uid || isAdmin());
+    }
+
+    match /listings/{listingId} {
+      allow get: if isVerifiedSignedIn() && isValidId(listingId);
+      allow list: if isVerifiedSignedIn() && resource.data.price_points >= 0;
+      allow create: if isVerifiedSignedIn() && isValidId(listingId) && isValidListing(incoming()) &&
+        incoming().owner_auth_uid == request.auth.uid &&
+        incoming().obligation_status == 'None' &&
+        incoming().createdAt == request.time &&
+        incoming().updatedAt == request.time;
+      allow update: if isVerifiedSignedIn() && isValidId(listingId) && isValidListing(incoming()) &&
+        incoming().owner_auth_uid == existing().owner_auth_uid &&
+        incoming().owner_uid == existing().owner_uid &&
+        incoming().createdAt == existing().createdAt &&
+        incoming().updatedAt == request.time && (
+          isAdmin() ||
+          (existing().owner_auth_uid == request.auth.uid && incoming().diff(existing()).affectedKeys().hasOnly(['availability_status', 'updatedAt'])) ||
+          (existing().owner_auth_uid == request.auth.uid && existing().obligation_status == 'None' && incoming().diff(existing()).affectedKeys().hasOnly([
+            'title', 'category', 'description', 'delivery_method', 'location', 'google_map_link',
+            'contact_info', 'image_urls', 'video_url', 'evidence_link', 'price_points',
+            'payment_model', 'end_date', 'investment_goal_points', 'budget_doc_url', 'presentation_url',
+            'availability_status', 'updatedAt'
+          ])) ||
+          (incoming().diff(existing()).affectedKeys().hasOnly(['obligation_status', 'updatedAt']) && incoming().obligation_status == 'HasObligations') ||
+          (incoming().diff(existing()).affectedKeys().hasOnly(['obligation_status', 'availability_status', 'updatedAt']) && incoming().obligation_status == 'HasObligations' && incoming().availability_status == 'Active')
+        );
+      allow delete: if isVerifiedSignedIn() && isValidId(listingId) && ((existing().owner_auth_uid == request.auth.uid && existing().obligation_status == 'None') || isAdmin());
+    }
+
+    match /projects/{projectId} {
+      allow get: if isVerifiedSignedIn() && isValidId(projectId);
+      allow list: if isVerifiedSignedIn() && (resource.data.visibility == 'Public' || resource.data.owner_auth_uid == request.auth.uid || isAdmin());
+      allow create: if isVerifiedSignedIn() && isValidId(projectId) && isValidProject(incoming()) &&
+        incoming().owner_auth_uid == request.auth.uid &&
+        incoming().obligation_status == 'None' &&
+        incoming().createdAt == request.time &&
+        incoming().updatedAt == request.time;
+      allow update: if isVerifiedSignedIn() && isValidId(projectId) && isValidProject(incoming()) &&
+        incoming().owner_auth_uid == existing().owner_auth_uid &&
+        incoming().createdAt == existing().createdAt &&
+        incoming().updatedAt == request.time && (
+          isAdmin() ||
+          (existing().owner_auth_uid == request.auth.uid && incoming().diff(existing()).affectedKeys().hasOnly([
+            'name', 'category', 'description', 'visibility', 'location', 'google_map_link',
+            'contact_info', 'image_urls', 'video_url', 'evidence_link', 'delegates',
+            'members', 'join_requests', 'elected_ceo_uid', 'obligation_status', 'updatedAt'
+          ])) ||
+          (incoming().diff(existing()).affectedKeys().hasOnly(['join_requests', 'members', 'updatedAt']))
+        );
+      allow delete: if isVerifiedSignedIn() && isValidId(projectId) && ((existing().owner_auth_uid == request.auth.uid && existing().obligation_status == 'None') || isAdmin());
+    }
+
+    match /project_hierarchy_items/{itemId} {
+      allow get: if isVerifiedSignedIn() && isValidId(itemId);
+      allow list: if isVerifiedSignedIn() && resource.data.approval_status in ['Pending', 'Approved', 'Rejected'];
+      allow create: if isVerifiedSignedIn() && isValidId(itemId) && isValidHierarchyItem(incoming()) &&
+        incoming().creator_auth_uid == request.auth.uid &&
+        exists(/databases/$(database)/documents/projects/$(incoming().project_id)) &&
+        incoming().createdAt == request.time &&
+        incoming().updatedAt == request.time;
+      allow update: if isVerifiedSignedIn() && isValidId(itemId) && isValidHierarchyItem(incoming()) &&
+        incoming().project_id == existing().project_id &&
+        incoming().creator_auth_uid == existing().creator_auth_uid &&
+        incoming().createdAt == existing().createdAt &&
+        incoming().updatedAt == request.time && (
+          isAdmin() ||
+          (existing().creator_auth_uid == request.auth.uid && existing().obligation_status == 'None' && incoming().diff(existing()).affectedKeys().hasOnly([
+            'function_name', 'step_title', 'fix_title', 'description', 'video_url', 'image_url',
+            'doc_url', 'resource_links', 'estimated_cost', 'updatedAt'
+          ])) ||
+          incoming().diff(existing()).affectedKeys().hasOnly(['votes', 'approval_status', 'assigned_uids', 'hours_spent', 'hardship_rating', 'execution_status', 'execution_reports', 'obligation_status', 'updatedAt'])
+        );
+      allow delete: if isVerifiedSignedIn() && isValidId(itemId) && ((existing().creator_auth_uid == request.auth.uid && existing().obligation_status == 'None') || isAdmin());
+    }
+
+    match /employment_postings/{jobId} {
+      allow get: if isVerifiedSignedIn() && isValidId(jobId);
+      allow list: if isVerifiedSignedIn() && resource.data.status in ['Open', 'Filled', 'Closed'];
+      allow create: if isVerifiedSignedIn() && isValidId(jobId) && isValidEmploymentPosting(incoming()) &&
+        incoming().poster_auth_uid == request.auth.uid &&
+        exists(/databases/$(database)/documents/projects/$(incoming().project_id)) &&
+        incoming().createdAt == request.time &&
+        incoming().updatedAt == request.time;
+      allow update: if isVerifiedSignedIn() && isValidId(jobId) && isValidEmploymentPosting(incoming()) &&
+        incoming().project_id == existing().project_id &&
+        incoming().poster_auth_uid == existing().poster_auth_uid &&
+        incoming().createdAt == existing().createdAt &&
+        incoming().updatedAt == request.time && (
+          isAdmin() ||
+          (existing().poster_auth_uid == request.auth.uid && incoming().diff(existing()).affectedKeys().hasOnly([
+            'position_title', 'qualifications', 'tasks_summary', 'required_course_ids',
+            'location', 'status', 'invites', 'applicants', 'obligation_status', 'updatedAt'
+          ])) ||
+          incoming().diff(existing()).affectedKeys().hasOnly(['applicants', 'obligation_status', 'updatedAt'])
+        );
+      allow delete: if isVerifiedSignedIn() && isValidId(jobId) && ((existing().poster_auth_uid == request.auth.uid && existing().obligation_status == 'None') || isAdmin());
+    }
+
+    match /orders/{orderId} {
+      allow get: if isVerifiedSignedIn() && isValidId(orderId) && (existing().buyer_auth_uid == request.auth.uid || existing().seller_auth_uid == request.auth.uid || isAdmin());
+      allow list: if isVerifiedSignedIn() && (resource.data.buyer_auth_uid == request.auth.uid || resource.data.seller_auth_uid == request.auth.uid || isAdmin());
+      allow create: if isVerifiedSignedIn() && isValidId(orderId) && isValidOrder(incoming()) &&
+        incoming().buyer_auth_uid == request.auth.uid &&
+        (incoming().listing_id in ['lst_1', 'lst_2', 'lst_3'] || exists(/databases/$(database)/documents/listings/$(incoming().listing_id))) &&
+        incoming().createdAt == request.time &&
+        incoming().updatedAt == request.time;
+      allow update: if isVerifiedSignedIn() && isValidId(orderId) && isValidOrder(incoming()) &&
+        incoming().buyer_auth_uid == existing().buyer_auth_uid &&
+        incoming().seller_auth_uid == existing().seller_auth_uid &&
+        incoming().createdAt == existing().createdAt &&
+        incoming().updatedAt == request.time && (
+          isAdmin() ||
+          (!(existing().order_status in ['Completed', 'Rejected']) && (
+            (existing().buyer_auth_uid == request.auth.uid && incoming().diff(existing()).affectedKeys().hasOnly(['order_status', 'delivery_status', 'rejection_reason', 'obligation_status', 'updatedAt'])) ||
+            (existing().seller_auth_uid == request.auth.uid && incoming().diff(existing()).affectedKeys().hasOnly(['order_status', 'updatedAt']))
+          ))
+        );
+      allow delete: if isAdmin() && isValidId(orderId);
+    }
+
+    match /deliveries/{deliveryId} {
+      allow get: if isVerifiedSignedIn() && isValidId(deliveryId) && (existing().receiver_auth_uid == request.auth.uid || existing().seller_auth_uid == request.auth.uid || isAdmin());
+      allow list: if isVerifiedSignedIn() && (resource.data.receiver_auth_uid == request.auth.uid || resource.data.seller_auth_uid == request.auth.uid || isAdmin());
+      allow create: if isVerifiedSignedIn() && isValidId(deliveryId) && isValidDelivery(incoming()) &&
+        incoming().receiver_auth_uid == request.auth.uid &&
+        exists(/databases/$(database)/documents/orders/$(incoming().order_id)) &&
+        incoming().createdAt == request.time;
+      allow update, delete: if isAdmin() && isValidId(deliveryId);
+    }
+
+    match /investments/{investmentId} {
+      allow get: if isVerifiedSignedIn() && isValidId(investmentId);
+      allow list: if isVerifiedSignedIn() && resource.data.invested_points > 0;
+      allow create: if isVerifiedSignedIn() && isValidId(investmentId) && isValidInvestment(incoming()) &&
+        incoming().investor_auth_uid == request.auth.uid &&
+        (incoming().listing_id in ['lst_1', 'lst_2', 'lst_3'] || exists(/databases/$(database)/documents/listings/$(incoming().listing_id))) &&
+        incoming().createdAt == request.time &&
+        incoming().updatedAt == request.time;
+      allow update: if isVerifiedSignedIn() && isValidId(investmentId) && isValidInvestment(incoming()) &&
+        incoming().investor_auth_uid == existing().investor_auth_uid &&
+        incoming().createdAt == existing().createdAt &&
+        incoming().updatedAt == request.time && (
+          isAdmin() ||
+          incoming().diff(existing()).affectedKeys().hasOnly(['dividends_earned', 'status', 'updatedAt'])
+        );
+      allow delete: if isVerifiedSignedIn() && isValidId(investmentId) && ((existing().investor_auth_uid == request.auth.uid && existing().obligation_status == 'None') || isAdmin());
+    }
+
+    match /point_exchanges/{exchangeId} {
+      allow get: if isVerifiedSignedIn() && isValidId(exchangeId);
+      allow list: if isVerifiedSignedIn() && resource.data.points_requested > 0;
+      allow create: if isVerifiedSignedIn() && isValidId(exchangeId) && isValidPointExchange(incoming()) &&
+        incoming().seller_auth_uid == request.auth.uid &&
+        incoming().status in ['Open', 'Escrow Locked'] &&
+        incoming().createdAt == request.time &&
+        incoming().updatedAt == request.time;
+      allow update: if isVerifiedSignedIn() && isValidId(exchangeId) && isValidPointExchange(incoming()) &&
+        incoming().seller_auth_uid == existing().seller_auth_uid &&
+        incoming().createdAt == existing().createdAt &&
+        incoming().updatedAt == request.time && (
+          isAdmin() ||
+          (!(existing().status in ['Released', 'Cancelled']) && (
+            (existing().seller_auth_uid == request.auth.uid && incoming().diff(existing()).affectedKeys().hasOnly(['status', 'obligation_status', 'updatedAt'])) ||
+            (incoming().diff(existing()).affectedKeys().hasOnly(['buyer_uid', 'buyer_auth_uid', 'payment_proof', 'status', 'obligation_status', 'updatedAt']))
+          ))
+        );
+      allow delete: if isVerifiedSignedIn() && isValidId(exchangeId) && ((existing().seller_auth_uid == request.auth.uid && existing().obligation_status == 'None') || isAdmin());
+    }
+
+    match /transaction_refs/{refId} {
+      allow get: if isVerifiedSignedIn() && isValidId(refId);
+      allow list: if isVerifiedSignedIn() && (resource.data.issuer_auth_uid == request.auth.uid || resource.data.counterparty_auth_uid == request.auth.uid || isAdmin());
+      allow create: if isVerifiedSignedIn() && isValidId(refId) && isValidTransactionRef(incoming()) &&
+        incoming().issuer_auth_uid == request.auth.uid &&
+        incoming().status == 'Pending' &&
+        incoming().createdAt == request.time &&
+        incoming().updatedAt == request.time;
+      allow update: if isVerifiedSignedIn() && isValidId(refId) && isValidTransactionRef(incoming()) &&
+        incoming().issuer_auth_uid == existing().issuer_auth_uid &&
+        incoming().createdAt == existing().createdAt &&
+        incoming().updatedAt == request.time && (
+          isAdmin() ||
+          (existing().status == 'Pending' && (
+            (existing().issuer_auth_uid == request.auth.uid && incoming().diff(existing()).affectedKeys().hasOnly(['status', 'description', 'trigger_type', 'trigger_payload', 'updatedAt'])) ||
+            (existing().issuer_auth_uid != request.auth.uid && incoming().diff(existing()).affectedKeys().hasOnly(['counterparty_uid', 'counterparty_auth_uid', 'payer_email', 'status', 'confirmed_at', 'obligation_status', 'updatedAt']))
+          ))
+        );
+      allow delete: if isVerifiedSignedIn() && isValidId(refId) && ((existing().issuer_auth_uid == request.auth.uid && existing().obligation_status == 'None') || isAdmin());
+    }
+
+    match /batch_payments/{batchId} {
+      allow get: if isVerifiedSignedIn() && isValidId(batchId) && (existing().creator_auth_uid == request.auth.uid || isAdmin());
+      allow list: if isVerifiedSignedIn() && (resource.data.creator_auth_uid == request.auth.uid || isAdmin());
+      allow create: if isVerifiedSignedIn() && isValidId(batchId) && isValidBatchPayment(incoming()) &&
+        incoming().creator_auth_uid == request.auth.uid &&
+        incoming().createdAt == request.time &&
+        incoming().updatedAt == request.time;
+      allow update: if isVerifiedSignedIn() && isValidId(batchId) && isValidBatchPayment(incoming()) &&
+        incoming().creator_auth_uid == existing().creator_auth_uid &&
+        incoming().createdAt == existing().createdAt &&
+        incoming().updatedAt == request.time && (
+          isAdmin() ||
+          (existing().creator_auth_uid == request.auth.uid && incoming().diff(existing()).affectedKeys().hasOnly([
+            'batch_name', 'recipients', 'scheduled_time', 'recurrence', 'notes',
+            'last_sent_at', 'send_count', 'status', 'obligation_status', 'updatedAt'
+          ]))
+        );
+      allow delete: if isVerifiedSignedIn() && isValidId(batchId) && ((existing().creator_auth_uid == request.auth.uid && existing().obligation_status == 'None') || isAdmin());
+    }
+
+    match /governance_delegates/{delId} {
+      allow get: if isVerifiedSignedIn() && isValidId(delId);
+      allow list: if isVerifiedSignedIn() && resource.data.scope in ['INSTITUTIONAL', 'PLATFORM'];
+      allow create: if isVerifiedSignedIn() && isValidId(delId) && isValidGovernanceDelegate(incoming()) &&
+        incoming().principal_auth_uid == request.auth.uid &&
+        incoming().createdAt == request.time &&
+        incoming().updatedAt == request.time;
+      allow update: if isVerifiedSignedIn() && isValidId(delId) && isValidGovernanceDelegate(incoming()) &&
+        incoming().principal_auth_uid == existing().principal_auth_uid &&
+        incoming().createdAt == existing().createdAt &&
+        incoming().updatedAt == request.time && (
+          isAdmin() ||
+          (existing().principal_auth_uid == request.auth.uid && incoming().diff(existing()).affectedKeys().hasOnly([
+            'delegate_email', 'delegate_uid', 'delegated_tasks', 'successor_email', 'absent_period_days', 'updatedAt'
+          ])) ||
+          incoming().diff(existing()).affectedKeys().hasOnly(['ceo_votes', 'updatedAt'])
+        );
+      allow delete: if isVerifiedSignedIn() && isValidId(delId) && (existing().principal_auth_uid == request.auth.uid || isAdmin());
+    }
+
+    match /user_reports/{reportId} {
+      allow get: if isVerifiedSignedIn() && isValidId(reportId) && (existing().reporter_auth_uid == request.auth.uid || isAdmin());
+      allow list: if isVerifiedSignedIn() && (resource.data.reporter_auth_uid == request.auth.uid || isAdmin());
+      allow create: if isVerifiedSignedIn() && isValidId(reportId) && isValidUserReport(incoming()) &&
+        incoming().reporter_auth_uid == request.auth.uid &&
+        incoming().status == 'Open' &&
+        incoming().createdAt == request.time &&
+        incoming().updatedAt == request.time;
+      allow update: if isAdmin() && isValidId(reportId) && isValidUserReport(incoming()) &&
+        incoming().createdAt == existing().createdAt &&
+        incoming().updatedAt == request.time;
+      allow delete: if isAdmin() && isValidId(reportId);
+    }
+
+    match /system_config/{configKey} {
+      allow get: if configKey == 'platform' || (isVerifiedSignedIn() && isValidId(configKey));
+      allow list: if isAdmin() && resource.data.key == 'platform';
+      allow create, update: if isAdmin() && isValidId(configKey) && isValidSystemConfig(incoming()) &&
+        incoming().updatedAt == request.time;
+      allow delete: if isAdmin() && isValidId(configKey);
+    }
+
+    match /notifications/{notifId} {
+      allow get: if isVerifiedSignedIn() && isValidId(notifId) && (existing().target_auth_uid == request.auth.uid || (existing().is_admin_alert == true && isAdmin()));
+      allow list: if isVerifiedSignedIn() && (resource.data.target_auth_uid == request.auth.uid || (resource.data.is_admin_alert == true && isAdmin()));
+      allow create: if isVerifiedSignedIn() && isValidId(notifId) && isValidNotification(incoming()) &&
+        incoming().createdAt == request.time;
+      allow update: if isVerifiedSignedIn() && isValidId(notifId) && isValidNotification(incoming()) &&
+        incoming().createdAt == existing().createdAt &&
+        (isAdmin() || (existing().target_auth_uid == request.auth.uid && incoming().diff(existing()).affectedKeys().hasOnly(['read'])));
+      allow delete: if isAdmin() && isValidId(notifId);
+    }
+  }
+}

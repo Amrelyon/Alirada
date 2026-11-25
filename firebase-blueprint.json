@@ -1,0 +1,518 @@
+{
+  "entities": {
+    "Profile": {
+      "title": "Profile",
+      "description": "Public cooperative member profile mapped to immutable Universal ID.",
+      "type": "object",
+      "properties": {
+        "uid": { "type": "string", "minLength": 1, "maxLength": 128, "pattern": "^[a-zA-Z0-9_\\-]+$" },
+        "universal_id": { "type": "string", "minLength": 5, "maxLength": 32, "pattern": "^UID-[0-9]+$" },
+        "full_name": { "type": "string", "minLength": 1, "maxLength": 120 },
+        "entity_type": { "type": "string", "enum": ["Individual", "Family", "Organization", "Governmental", "Charity / Vulnerable Entity"] },
+        "country": { "type": "string", "maxLength": 80 },
+        "city": { "type": "string", "maxLength": 80 },
+        "profile_image_url": { "type": "string", "maxLength": 512 },
+        "image_verified_status": { "type": "string", "enum": ["Pending", "Verified", "Flagged"] },
+        "user_status": { "type": "string", "enum": ["Active", "Warning", "Frozen", "Blocked"] },
+        "penalty_score": { "type": "number" },
+        "carried_balance": { "type": "number" },
+        "absent_period_days": { "type": "integer" },
+        "last_active_at": { "type": "string", "maxLength": 64 },
+        "created_at": { "type": "string", "maxLength": 64 }
+      },
+      "required": ["uid", "universal_id", "full_name", "entity_type", "profile_image_url", "image_verified_status", "user_status", "penalty_score", "carried_balance", "absent_period_days", "created_at"]
+    },
+    "ProfilePrivate": {
+      "title": "ProfilePrivate",
+      "description": "Isolated PII, security question, legacy succession, and compliance metadata.",
+      "type": "object",
+      "properties": {
+        "uid": { "type": "string", "minLength": 1, "maxLength": 128, "pattern": "^[a-zA-Z0-9_\\-]+$" },
+        "email": { "type": "string", "maxLength": 180 },
+        "contact_info": { "type": "string", "maxLength": 240 },
+        "registration_evidence": { "type": "string", "maxLength": 512 },
+        "evidence_approved": { "type": "boolean" },
+        "security_question": { "type": "string", "maxLength": 240 },
+        "security_answer_hash": { "type": "string", "maxLength": 256 },
+        "block_reason": { "type": "string", "maxLength": 500 },
+        "freeze_until": { "type": "string", "maxLength": 64 },
+        "successor_email": { "type": "string", "maxLength": 180 },
+        "legacy_beneficiaries": { "type": "array" },
+        "charity_grant_config": { "type": "object" },
+        "updated_at": { "type": "string", "maxLength": 64 }
+      },
+      "required": ["uid", "email", "evidence_approved", "updated_at"]
+    },
+    "ServiceLog": {
+      "title": "ServiceLog",
+      "description": "Core cooperative service record calculating Final Score = Hours * Hardship.",
+      "type": "object",
+      "properties": {
+        "log_number": { "type": "string", "maxLength": 40 },
+        "logged_date": { "type": "string", "maxLength": 32 },
+        "provider_uid": { "type": "string", "maxLength": 32 },
+        "provider_auth_uid": { "type": "string", "maxLength": 128 },
+        "recipient_uid": { "type": "string", "maxLength": 32 },
+        "service_type": { "type": "string", "maxLength": 160 },
+        "hours": { "type": "number" },
+        "hardship": { "type": "integer" },
+        "final_score": { "type": "number" },
+        "evidence_link": { "type": "string", "maxLength": 512 },
+        "google_map_link": { "type": "string", "maxLength": 512 },
+        "notes": { "type": "string", "maxLength": 1000 },
+        "project_context": { "type": "string", "maxLength": 240 },
+        "entity_type": { "type": "string", "maxLength": 64 },
+        "created_by_delegate_id": { "type": "string", "maxLength": 128 },
+        "daily_exceed_flag": { "type": "boolean" },
+        "created_at": { "type": "string", "maxLength": 64 }
+      },
+      "required": ["log_number", "logged_date", "provider_uid", "provider_auth_uid", "recipient_uid", "service_type", "hours", "hardship", "final_score", "created_at"]
+    },
+    "RequestedServantLog": {
+      "title": "RequestedServantLog",
+      "description": "Service deduction log linked to a provider service record.",
+      "type": "object",
+      "properties": {
+        "request_number": { "type": "string", "maxLength": 40 },
+        "logged_date": { "type": "string", "maxLength": 32 },
+        "requested_servant_uid": { "type": "string", "maxLength": 32 },
+        "requester_uid": { "type": "string", "maxLength": 32 },
+        "requester_auth_uid": { "type": "string", "maxLength": 128 },
+        "related_service_log_id": { "type": "string", "maxLength": 128 },
+        "deducted_score": { "type": "number" },
+        "evidence_link": { "type": "string", "maxLength": 512 },
+        "notes": { "type": "string", "maxLength": 1000 },
+        "entity_type": { "type": "string", "maxLength": 64 },
+        "created_by_delegate_id": { "type": "string", "maxLength": 128 },
+        "status": { "type": "string", "enum": ["Recorded", "Disputed", "Resolved"] },
+        "created_at": { "type": "string", "maxLength": 64 }
+      },
+      "required": ["request_number", "logged_date", "requested_servant_uid", "requester_uid", "requester_auth_uid", "deducted_score", "status", "created_at"]
+    },
+    "RecognitionVote": {
+      "title": "RecognitionVote",
+      "description": "Peer recognition vote (UPWARD or COMPENSATE) preventing self-voting.",
+      "type": "object",
+      "properties": {
+        "target_uid": { "type": "string", "maxLength": 32 },
+        "recognizer_uid": { "type": "string", "maxLength": 32 },
+        "recognizer_auth_uid": { "type": "string", "maxLength": 128 },
+        "direction": { "type": "string", "enum": ["UPWARD", "COMPENSATE"] },
+        "comment": { "type": "string", "maxLength": 500 },
+        "created_at": { "type": "string", "maxLength": 64 }
+      },
+      "required": ["target_uid", "recognizer_uid", "recognizer_auth_uid", "direction", "comment", "created_at"]
+    },
+    "Listing": {
+      "title": "Listing",
+      "description": "Marketplace Product, Service, or Course listing with crowdfunding support.",
+      "type": "object",
+      "properties": {
+        "listing_code": { "type": "string", "maxLength": 40 },
+        "owner_uid": { "type": "string", "maxLength": 32 },
+        "owner_auth_uid": { "type": "string", "maxLength": 128 },
+        "listing_type": { "type": "string", "enum": ["Product", "Service", "Course"] },
+        "title": { "type": "string", "maxLength": 160 },
+        "category": { "type": "string", "maxLength": 100 },
+        "description": { "type": "string", "maxLength": 2000 },
+        "delivery_method": { "type": "string", "maxLength": 100 },
+        "location": { "type": "string", "maxLength": 160 },
+        "google_map_link": { "type": "string", "maxLength": 512 },
+        "contact_info": { "type": "string", "maxLength": 200 },
+        "image_urls": { "type": "array" },
+        "video_url": { "type": "string", "maxLength": 512 },
+        "evidence_link": { "type": "string", "maxLength": 512 },
+        "price_points": { "type": "number" },
+        "payment_model": { "type": "string", "enum": ["One-Time", "Monthly Installment", "Monthly Subscription"] },
+        "end_date": { "type": "string", "maxLength": 32 },
+        "investment_goal_points": { "type": "number" },
+        "budget_doc_url": { "type": "string", "maxLength": 512 },
+        "presentation_url": { "type": "string", "maxLength": 512 },
+        "entity_type": { "type": "string", "maxLength": 64 },
+        "availability_status": { "type": "string", "enum": ["Funding", "Active"] },
+        "obligation_status": { "type": "string", "enum": ["None", "HasObligations"] },
+        "created_at": { "type": "string", "maxLength": 64 }
+      },
+      "required": ["listing_code", "owner_uid", "owner_auth_uid", "listing_type", "title", "category", "price_points", "payment_model", "obligation_status", "created_at"]
+    },
+    "Project": {
+      "title": "Project",
+      "description": "Cooperative project workspace with members, delegates, and elected CEO.",
+      "type": "object",
+      "properties": {
+        "project_code": { "type": "string", "maxLength": 40 },
+        "owner_uid": { "type": "string", "maxLength": 32 },
+        "owner_auth_uid": { "type": "string", "maxLength": 128 },
+        "elected_ceo_uid": { "type": "string", "maxLength": 32 },
+        "name": { "type": "string", "maxLength": 160 },
+        "category": { "type": "string", "maxLength": 100 },
+        "description": { "type": "string", "maxLength": 2000 },
+        "visibility": { "type": "string", "enum": ["Public", "Private"] },
+        "location": { "type": "string", "maxLength": 160 },
+        "google_map_link": { "type": "string", "maxLength": 512 },
+        "contact_info": { "type": "string", "maxLength": 200 },
+        "image_urls": { "type": "array" },
+        "video_url": { "type": "string", "maxLength": 512 },
+        "evidence_link": { "type": "string", "maxLength": 512 },
+        "entity_type": { "type": "string", "maxLength": 64 },
+        "delegates": { "type": "array" },
+        "members": { "type": "array" },
+        "join_requests": { "type": "array" },
+        "obligation_status": { "type": "string", "enum": ["None", "HasObligations"] },
+        "created_at": { "type": "string", "maxLength": 64 }
+      },
+      "required": ["project_code", "owner_uid", "owner_auth_uid", "name", "visibility", "obligation_status", "created_at"]
+    },
+    "ProjectHierarchyItem": {
+      "title": "ProjectHierarchyItem",
+      "description": "Nested project item representing Function -> Step -> Fix with voting and execution.",
+      "type": "object",
+      "properties": {
+        "task_code": { "type": "string", "maxLength": 40 },
+        "project_id": { "type": "string", "maxLength": 128 },
+        "creator_auth_uid": { "type": "string", "maxLength": 128 },
+        "function_name": { "type": "string", "maxLength": 160 },
+        "step_title": { "type": "string", "maxLength": 160 },
+        "fix_title": { "type": "string", "maxLength": 160 },
+        "description": { "type": "string", "maxLength": 1500 },
+        "video_url": { "type": "string", "maxLength": 512 },
+        "image_url": { "type": "string", "maxLength": 512 },
+        "doc_url": { "type": "string", "maxLength": 512 },
+        "resource_links": { "type": "array" },
+        "estimated_cost": { "type": "number" },
+        "votes": { "type": "object" },
+        "approval_status": { "type": "string", "enum": ["Pending", "Approved", "Rejected"] },
+        "assigned_uids": { "type": "array" },
+        "hours_spent": { "type": "number" },
+        "hardship_rating": { "type": "integer" },
+        "execution_status": { "type": "string", "enum": ["Open", "In Progress", "Executed"] },
+        "execution_reports": { "type": "array" },
+        "obligation_status": { "type": "string", "enum": ["None", "HasObligations"] },
+        "created_at": { "type": "string", "maxLength": 64 }
+      },
+      "required": ["task_code", "project_id", "creator_auth_uid", "function_name", "approval_status", "execution_status", "obligation_status", "created_at"]
+    },
+    "EmploymentPosting": {
+      "title": "EmploymentPosting",
+      "description": "Cooperative job posting inside a project with course requirements and applicants.",
+      "type": "object",
+      "properties": {
+        "job_code": { "type": "string", "maxLength": 40 },
+        "project_id": { "type": "string", "maxLength": 128 },
+        "poster_uid": { "type": "string", "maxLength": 32 },
+        "poster_auth_uid": { "type": "string", "maxLength": 128 },
+        "position_title": { "type": "string", "maxLength": 160 },
+        "qualifications": { "type": "string", "maxLength": 1000 },
+        "tasks_summary": { "type": "string", "maxLength": 1000 },
+        "required_course_ids": { "type": "array" },
+        "location": { "type": "string", "maxLength": 160 },
+        "status": { "type": "string", "enum": ["Open", "Filled", "Closed"] },
+        "applicants": { "type": "array" },
+        "invites": { "type": "array" },
+        "obligation_status": { "type": "string", "enum": ["None", "HasObligations"] },
+        "created_at": { "type": "string", "maxLength": 64 }
+      },
+      "required": ["job_code", "project_id", "poster_uid", "poster_auth_uid", "position_title", "status", "obligation_status", "created_at"]
+    },
+    "Order": {
+      "title": "Order",
+      "description": "Marketplace order tracking buyer, seller, points settlement, and delivery state.",
+      "type": "object",
+      "properties": {
+        "order_number": { "type": "string", "maxLength": 40 },
+        "order_date": { "type": "string", "maxLength": 32 },
+        "buyer_uid": { "type": "string", "maxLength": 32 },
+        "buyer_auth_uid": { "type": "string", "maxLength": 128 },
+        "seller_uid": { "type": "string", "maxLength": 32 },
+        "seller_auth_uid": { "type": "string", "maxLength": 128 },
+        "listing_id": { "type": "string", "maxLength": 128 },
+        "listing_code": { "type": "string", "maxLength": 40 },
+        "listing_type": { "type": "string", "maxLength": 32 },
+        "quantity": { "type": "integer" },
+        "total_points": { "type": "number" },
+        "payment_model": { "type": "string", "maxLength": 48 },
+        "end_date": { "type": "string", "maxLength": 32 },
+        "google_map_link": { "type": "string", "maxLength": 512 },
+        "notes": { "type": "string", "maxLength": 1000 },
+        "order_status": { "type": "string", "enum": ["Pending", "Confirmed", "Completed", "Rejected"] },
+        "delivery_status": { "type": "string", "enum": ["Awaiting", "Delivered", "Partially Delivered", "Rejected"] },
+        "rejection_reason": { "type": "string", "maxLength": 500 },
+        "trigger_type": { "type": "string", "maxLength": 64 },
+        "trigger_payload": { "type": "string", "maxLength": 512 },
+        "obligation_status": { "type": "string", "enum": ["None", "HasObligations"] },
+        "created_at": { "type": "string", "maxLength": 64 }
+      },
+      "required": ["order_number", "order_date", "buyer_uid", "buyer_auth_uid", "seller_uid", "listing_id", "quantity", "total_points", "order_status", "delivery_status", "obligation_status", "created_at"]
+    },
+    "Delivery": {
+      "title": "Delivery",
+      "description": "Buyer delivery confirmation/rejection proof linked to an order.",
+      "type": "object",
+      "properties": {
+        "delivery_number": { "type": "string", "maxLength": 40 },
+        "order_id": { "type": "string", "maxLength": 128 },
+        "receiver_uid": { "type": "string", "maxLength": 32 },
+        "receiver_auth_uid": { "type": "string", "maxLength": 128 },
+        "delivery_evidence": { "type": "string", "maxLength": 512 },
+        "delivery_status": { "type": "string", "enum": ["Delivered", "Partially Delivered", "Rejected"] },
+        "notes": { "type": "string", "maxLength": 1000 },
+        "rejection_reason": { "type": "string", "maxLength": 500 },
+        "created_by_delegate_id": { "type": "string", "maxLength": 128 },
+        "obligation_status": { "type": "string", "enum": ["None", "HasObligations"] },
+        "created_at": { "type": "string", "maxLength": 64 }
+      },
+      "required": ["delivery_number", "order_id", "receiver_uid", "receiver_auth_uid", "delivery_status", "obligation_status", "created_at"]
+    },
+    "Investment": {
+      "title": "Investment",
+      "description": "Crowdfunding investment contribution earning proportional dividends upon order delivery.",
+      "type": "object",
+      "properties": {
+        "investment_code": { "type": "string", "maxLength": 40 },
+        "investor_uid": { "type": "string", "maxLength": 32 },
+        "investor_auth_uid": { "type": "string", "maxLength": 128 },
+        "listing_id": { "type": "string", "maxLength": 128 },
+        "listing_code": { "type": "string", "maxLength": 40 },
+        "target_type": { "type": "string", "maxLength": 48 },
+        "invested_points": { "type": "number" },
+        "share_percentage": { "type": "number" },
+        "budget_doc_link": { "type": "string", "maxLength": 512 },
+        "presentation_link": { "type": "string", "maxLength": 512 },
+        "dividends_earned": { "type": "number" },
+        "status": { "type": "string", "enum": ["Active", "Returned", "Cancelled"] },
+        "obligation_status": { "type": "string", "enum": ["None", "HasObligations"] },
+        "created_at": { "type": "string", "maxLength": 64 }
+      },
+      "required": ["investment_code", "investor_uid", "investor_auth_uid", "listing_id", "invested_points", "share_percentage", "dividends_earned", "status", "obligation_status", "created_at"]
+    },
+    "PointExchange": {
+      "title": "PointExchange",
+      "description": "Peer-to-peer point-for-currency listing with escrow and release confirmation.",
+      "type": "object",
+      "properties": {
+        "exchange_code": { "type": "string", "maxLength": 40 },
+        "buyer_uid": { "type": "string", "maxLength": 32 },
+        "buyer_auth_uid": { "type": "string", "maxLength": 128 },
+        "seller_uid": { "type": "string", "maxLength": 32 },
+        "seller_auth_uid": { "type": "string", "maxLength": 128 },
+        "points_requested": { "type": "number" },
+        "cash_amount": { "type": "number" },
+        "currency": { "type": "string", "maxLength": 12 },
+        "status": { "type": "string", "enum": ["Open", "Escrow Locked", "Proof Submitted", "Released", "Cancelled"] },
+        "payment_proof": { "type": "string", "maxLength": 512 },
+        "notes": { "type": "string", "maxLength": 500 },
+        "obligation_status": { "type": "string", "enum": ["None", "HasObligations"] },
+        "created_at": { "type": "string", "maxLength": 64 }
+      },
+      "required": ["exchange_code", "seller_uid", "seller_auth_uid", "points_requested", "cash_amount", "currency", "status", "obligation_status", "created_at"]
+    },
+    "TransactionRef": {
+      "title": "TransactionRef",
+      "description": "C2P or P2P payment reference code with widget metadata and post-payment trigger.",
+      "type": "object",
+      "properties": {
+        "ref_code": { "type": "string", "maxLength": 64 },
+        "ref_type": { "type": "string", "enum": ["P2P", "C2P"] },
+        "issuer_uid": { "type": "string", "maxLength": 32 },
+        "issuer_auth_uid": { "type": "string", "maxLength": 128 },
+        "counterparty_uid": { "type": "string", "maxLength": 32 },
+        "counterparty_auth_uid": { "type": "string", "maxLength": 128 },
+        "linked_listing_code": { "type": "string", "maxLength": 40 },
+        "widget_name": { "type": "string", "maxLength": 120 },
+        "points_amount": { "type": "number" },
+        "payment_model": { "type": "string", "maxLength": 48 },
+        "end_date": { "type": "string", "maxLength": 32 },
+        "description": { "type": "string", "maxLength": 500 },
+        "trigger_type": { "type": "string", "enum": ["None", "Redirect URL", "Webhook/Notification", "Access Grant", "Order Creation", "Manual Verification Request"] },
+        "trigger_payload": { "type": "string", "maxLength": 512 },
+        "status": { "type": "string", "enum": ["Pending", "Confirmed", "Cancelled"] },
+        "payer_email": { "type": "string", "maxLength": 180 },
+        "confirmed_at": { "type": "string", "maxLength": 64 },
+        "obligation_status": { "type": "string", "enum": ["None", "HasObligations"] },
+        "created_at": { "type": "string", "maxLength": 64 }
+      },
+      "required": ["ref_code", "ref_type", "issuer_uid", "issuer_auth_uid", "points_amount", "payment_model", "trigger_type", "status", "obligation_status", "created_at"]
+    },
+    "BatchPayment": {
+      "title": "BatchPayment",
+      "description": "Batch disbursement schedule to multiple recipient UIDs.",
+      "type": "object",
+      "properties": {
+        "batch_code": { "type": "string", "maxLength": 40 },
+        "creator_uid": { "type": "string", "maxLength": 32 },
+        "creator_auth_uid": { "type": "string", "maxLength": 128 },
+        "batch_name": { "type": "string", "maxLength": 160 },
+        "recipients": { "type": "array" },
+        "scheduled_time": { "type": "string", "maxLength": 64 },
+        "recurrence": { "type": "string", "enum": ["Once", "Weekly", "Monthly"] },
+        "notes": { "type": "string", "maxLength": 500 },
+        "last_sent_at": { "type": "string", "maxLength": 64 },
+        "send_count": { "type": "integer" },
+        "status": { "type": "string", "enum": ["Draft", "Scheduled", "Sent"] },
+        "obligation_status": { "type": "string", "enum": ["None", "HasObligations"] },
+        "created_at": { "type": "string", "maxLength": 64 }
+      },
+      "required": ["batch_code", "creator_uid", "creator_auth_uid", "batch_name", "recipients", "recurrence", "send_count", "status", "obligation_status", "created_at"]
+    },
+    "GovernanceDelegate": {
+      "title": "GovernanceDelegate",
+      "description": "Institutional and platform delegation, task assignment, CEO votes, and legacy succession.",
+      "type": "object",
+      "properties": {
+        "scope": { "type": "string", "enum": ["INSTITUTIONAL", "PLATFORM"] },
+        "principal_uid": { "type": "string", "maxLength": 32 },
+        "principal_auth_uid": { "type": "string", "maxLength": 128 },
+        "entity_name": { "type": "string", "maxLength": 160 },
+        "delegate_email": { "type": "string", "maxLength": 180 },
+        "delegate_uid": { "type": "string", "maxLength": 32 },
+        "delegated_tasks": { "type": "array" },
+        "ceo_votes": { "type": "array" },
+        "successor_email": { "type": "string", "maxLength": 180 },
+        "absent_period_days": { "type": "integer" },
+        "updated_at": { "type": "string", "maxLength": 64 }
+      },
+      "required": ["scope", "principal_uid", "principal_auth_uid", "entity_name", "delegate_email", "updated_at"]
+    },
+    "UserReport": {
+      "title": "UserReport",
+      "description": "User-submitted report for suspicious profiles, logs, orders, listings, or images.",
+      "type": "object",
+      "properties": {
+        "report_code": { "type": "string", "maxLength": 40 },
+        "reporter_auth_uid": { "type": "string", "maxLength": 128 },
+        "reporter_email": { "type": "string", "maxLength": 180 },
+        "target_type": { "type": "string", "enum": ["User", "Profile Image", "Service Log", "Listing", "Order"] },
+        "target_id": { "type": "string", "maxLength": 128 },
+        "reason": { "type": "string", "maxLength": 1000 },
+        "status": { "type": "string", "enum": ["Open", "Reviewed", "Actioned", "Dismissed"] },
+        "created_at": { "type": "string", "maxLength": 64 }
+      },
+      "required": ["report_code", "reporter_auth_uid", "target_type", "target_id", "reason", "status", "created_at"]
+    },
+    "SystemConfig": {
+      "title": "SystemConfig",
+      "description": "Platform configuration for points floor, daily hour caps, micro-fee, video link, and dynamic lists.",
+      "type": "object",
+      "properties": {
+        "key": { "type": "string", "maxLength": 64 },
+        "value": { "type": "object" },
+        "category": { "type": "string", "maxLength": 64 },
+        "description": { "type": "string", "maxLength": 300 },
+        "updated_at": { "type": "string", "maxLength": 64 }
+      },
+      "required": ["key", "value", "category", "updated_at"]
+    },
+    "Notification": {
+      "title": "Notification",
+      "description": "User alerts and admin threshold/report notifications.",
+      "type": "object",
+      "properties": {
+        "actor_uid": { "type": "string", "maxLength": 32 },
+        "target_uid": { "type": "string", "maxLength": 32 },
+        "target_auth_uid": { "type": "string", "maxLength": 128 },
+        "title": { "type": "string", "maxLength": 160 },
+        "message": { "type": "string", "maxLength": 500 },
+        "is_admin_alert": { "type": "boolean" },
+        "read": { "type": "boolean" },
+        "created_at": { "type": "string", "maxLength": 64 }
+      },
+      "required": ["actor_uid", "target_uid", "title", "message", "is_admin_alert", "created_at"]
+    },
+    "AdminDelegate": {
+      "title": "AdminDelegate",
+      "description": "Delegated platform administrator invite/grant authorized exclusively by amrelyon@gmail.com.",
+      "type": "object",
+      "properties": {
+        "delegate_email": { "type": "string", "maxLength": 180 },
+        "delegate_uid": { "type": "string", "maxLength": 32 },
+        "tasks": { "type": "array" },
+        "delegated_by": { "type": "string", "maxLength": 180 },
+        "active": { "type": "boolean" },
+        "created_at": { "type": "string", "maxLength": 64 }
+      },
+      "required": ["delegate_email", "tasks", "delegated_by", "active", "created_at"]
+    }
+  },
+  "firestore": {
+    "/profiles/{uid}": {
+      "schema": { "$ref": "#/entities/Profile" },
+      "description": "Public cooperative member profiles."
+    },
+    "/profiles_private/{uid}": {
+      "schema": { "$ref": "#/entities/ProfilePrivate" },
+      "description": "Owner/Admin-restricted PII and legacy protocol settings."
+    },
+    "/service_logs/{logId}": {
+      "schema": { "$ref": "#/entities/ServiceLog" },
+      "description": "Cooperative service logs."
+    },
+    "/requested_servant_logs/{reqId}": {
+      "schema": { "$ref": "#/entities/RequestedServantLog" },
+      "description": "Requested servant deduction logs."
+    },
+    "/recognition_votes/{voteId}": {
+      "schema": { "$ref": "#/entities/RecognitionVote" },
+      "description": "Peer recognition upward/compensate votes."
+    },
+    "/listings/{listingId}": {
+      "schema": { "$ref": "#/entities/Listing" },
+      "description": "Marketplace products, services, and courses."
+    },
+    "/projects/{projectId}": {
+      "schema": { "$ref": "#/entities/Project" },
+      "description": "Cooperative projects."
+    },
+    "/project_hierarchy_items/{itemId}": {
+      "schema": { "$ref": "#/entities/ProjectHierarchyItem" },
+      "description": "Project Function -> Step -> Fix hierarchy items."
+    },
+    "/employment_postings/{jobId}": {
+      "schema": { "$ref": "#/entities/EmploymentPosting" },
+      "description": "Project employment postings."
+    },
+    "/orders/{orderId}": {
+      "schema": { "$ref": "#/entities/Order" },
+      "description": "Marketplace orders."
+    },
+    "/deliveries/{deliveryId}": {
+      "schema": { "$ref": "#/entities/Delivery" },
+      "description": "Order delivery proofs."
+    },
+    "/investments/{investmentId}": {
+      "schema": { "$ref": "#/entities/Investment" },
+      "description": "Crowdfunding investments."
+    },
+    "/point_exchanges/{exchangeId}": {
+      "schema": { "$ref": "#/entities/PointExchange" },
+      "description": "Peer-to-peer point exchanges."
+    },
+    "/transaction_refs/{refId}": {
+      "schema": { "$ref": "#/entities/TransactionRef" },
+      "description": "C2P and P2P payment reference codes."
+    },
+    "/batch_payments/{batchId}": {
+      "schema": { "$ref": "#/entities/BatchPayment" },
+      "description": "Batch payment schedules."
+    },
+    "/governance_delegates/{delId}": {
+      "schema": { "$ref": "#/entities/GovernanceDelegate" },
+      "description": "Institutional and platform delegation records."
+    },
+    "/user_reports/{reportId}": {
+      "schema": { "$ref": "#/entities/UserReport" },
+      "description": "User-submitted safety and compliance reports."
+    },
+    "/system_config/{configKey}": {
+      "schema": { "$ref": "#/entities/SystemConfig" },
+      "description": "Global platform configuration parameters."
+    },
+    "/notifications/{notifId}": {
+      "schema": { "$ref": "#/entities/Notification" },
+      "description": "Platform and admin alert notifications."
+    },
+    "/admin_delegates/{delegateId}": {
+      "schema": { "$ref": "#/entities/AdminDelegate" },
+      "description": "Delegated admin authorization records managed by root administrator."
+    }
+  }
+}

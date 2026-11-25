@@ -1,0 +1,8 @@
+{
+  "name": "Alirada",
+  "description": "Alirada — be served as you serve. Service Economy, Cooperative Ledger, Marketplace, Project Workspace, Crowdfunding, Point Exchange, and Governance Platform.",
+  "requestFramePermissions": [],
+  "majorCapabilities": [
+    "MAJOR_CAPABILITY_SERVER_SIDE_GEMINI_API"
+  ]
+}
