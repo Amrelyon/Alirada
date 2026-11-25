@@ -37,6 +37,10 @@ jobs:
       - name: Type check
         run: npm run lint
 
+      - name: Setup Pages
+        id: pages
+        uses: actions/configure-pages@v5
+
       - name: Prepare optional Firebase applet config
         env:
           FIREBASE_APPLET_CONFIG: ${{ secrets.FIREBASE_APPLET_CONFIG || vars.FIREBASE_APPLET_CONFIG }}
@@ -47,7 +51,7 @@ jobs:
 
       - name: Build production bundle
         env:
-          VITE_BASE_PATH: ./
+          VITE_BASE_PATH: "${{ steps.pages.outputs.base_path || '' }}/"
           VITE_FIREBASE_API_KEY: ${{ secrets.VITE_FIREBASE_API_KEY || vars.VITE_FIREBASE_API_KEY }}
           VITE_FIREBASE_AUTH_DOMAIN: ${{ secrets.VITE_FIREBASE_AUTH_DOMAIN || vars.VITE_FIREBASE_AUTH_DOMAIN }}
           VITE_FIREBASE_PROJECT_ID: ${{ secrets.VITE_FIREBASE_PROJECT_ID || vars.VITE_FIREBASE_PROJECT_ID }}
@@ -57,8 +61,9 @@ jobs:
           VITE_FIREBASE_DATABASE_ID: ${{ secrets.VITE_FIREBASE_DATABASE_ID || vars.VITE_FIREBASE_DATABASE_ID }}
         run: npm run build
 
-      - name: Copy SPA 404 fallback and disable Jekyll
+      - name: Configure custom domain CNAME, SPA 404 fallback, and disable Jekyll
         run: |
+          echo "alirada.com" > dist/CNAME
           cp dist/index.html dist/404.html
           touch dist/.nojekyll
 
