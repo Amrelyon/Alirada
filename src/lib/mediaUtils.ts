@@ -38,6 +38,11 @@ export function normalizeMediaImageUrl(rawUrl?: string): string {
     return `https://lh3.googleusercontent.com/d/${driveOpenMatch[1]}`;
   }
 
+  if (url.startsWith('/src/assets/')) {
+    const base = (import.meta.env.BASE_URL || '/').replace(/\/$/, '');
+    return `${base}${url}`;
+  }
+
   return url;
 }
 
