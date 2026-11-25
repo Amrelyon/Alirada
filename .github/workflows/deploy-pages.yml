@@ -37,17 +37,30 @@ jobs:
       - name: Type check
         run: npm run lint
 
-      - name: Build production bundle
+      - name: Prepare optional Firebase applet config
+        env:
+          FIREBASE_APPLET_CONFIG: ${{ secrets.FIREBASE_APPLET_CONFIG }}
         run: |
-          if [ "${{ github.event.repository.name }}" = "${{ github.repository_owner }}.github.io" ]; then
-            export VITE_BASE_PATH="/"
-          else
-            export VITE_BASE_PATH="/${{ github.event.repository.name }}/"
+          if [ -n "$FIREBASE_APPLET_CONFIG" ] && [ ! -f firebase-applet-config.json ]; then
+            printf '%s' "$FIREBASE_APPLET_CONFIG" > firebase-applet-config.json
           fi
-          npm run build
 
-      - name: Copy SPA 404 fallback
-        run: cp dist/index.html dist/404.html
+      - name: Build production bundle
+        env:
+          VITE_BASE_PATH: ./
+          VITE_FIREBASE_API_KEY: ${{ secrets.VITE_FIREBASE_API_KEY || vars.VITE_FIREBASE_API_KEY }}
+          VITE_FIREBASE_AUTH_DOMAIN: ${{ secrets.VITE_FIREBASE_AUTH_DOMAIN || vars.VITE_FIREBASE_AUTH_DOMAIN }}
+          VITE_FIREBASE_PROJECT_ID: ${{ secrets.VITE_FIREBASE_PROJECT_ID || vars.VITE_FIREBASE_PROJECT_ID }}
+          VITE_FIREBASE_APP_ID: ${{ secrets.VITE_FIREBASE_APP_ID || vars.VITE_FIREBASE_APP_ID }}
+          VITE_FIREBASE_STORAGE_BUCKET: ${{ secrets.VITE_FIREBASE_STORAGE_BUCKET || vars.VITE_FIREBASE_STORAGE_BUCKET }}
+          VITE_FIREBASE_MESSAGING_SENDER_ID: ${{ secrets.VITE_FIREBASE_MESSAGING_SENDER_ID || vars.VITE_FIREBASE_MESSAGING_SENDER_ID }}
+          VITE_FIREBASE_DATABASE_ID: ${{ secrets.VITE_FIREBASE_DATABASE_ID || vars.VITE_FIREBASE_DATABASE_ID }}
+        run: npm run build
+
+      - name: Copy SPA 404 fallback and disable Jekyll
+        run: |
+          cp dist/index.html dist/404.html
+          touch dist/.nojekyll
 
       - name: Upload Pages artifact
         uses: actions/upload-pages-artifact@v3
@@ -64,3 +77,4 @@ jobs:
       - name: Deploy to GitHub Pages
         id: deployment
         uses: actions/deploy-pages@v4
+

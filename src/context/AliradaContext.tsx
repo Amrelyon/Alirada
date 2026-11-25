@@ -14,11 +14,12 @@ import {
   where,
 } from 'firebase/firestore';
 import {
-  auth,
+  auth as firebaseAuth,
   createUserWithEmailAndPassword,
-  db,
+  db as firebaseDb,
   googleAuthProvider,
   handleFirestoreError,
+  isFirebaseConfigured,
   OperationType,
   sendEmailVerification,
   sendPasswordResetEmail,
@@ -108,6 +109,7 @@ export function getEffectiveListingAvailability(
 interface AliradaContextValue {
   firebaseUser: User | null;
   authReady: boolean;
+  isFirebaseConfigured: boolean;
   isLiveFirestore: boolean;
   isRootAdmin: boolean;
   isAdmin: boolean;
@@ -532,7 +534,8 @@ export const AliradaProvider: React.FC<{ children: React.ReactNode }> = ({ child
 
   // Load public platform system_config (intro video & mock_data_cleared) before auth resolves
   useEffect(() => {
-    getDoc(doc(db, 'system_config', 'platform'))
+    if (!isFirebaseConfigured || !firebaseDb) return;
+    getDoc(doc(firebaseDb, 'system_config', 'platform'))
       .then((snap) => {
         if (snap.exists()) {
           const data = snap.data() as { value?: Partial<SystemConfigState> };
@@ -555,8 +558,13 @@ export const AliradaProvider: React.FC<{ children: React.ReactNode }> = ({ child
 
   // Boot connection test & Auth listener
   useEffect(() => {
+    if (!isFirebaseConfigured || !firebaseAuth || !firebaseDb) {
+      setAuthReady(true);
+      return;
+    }
+    const db = firebaseDb;
     testConnection();
-    const unsub = onAuthStateChanged(auth, async (user) => {
+    const unsub = onAuthStateChanged(firebaseAuth, async (user) => {
       setFirebaseUser(user);
       setAuthReady(true);
 
@@ -653,7 +661,11 @@ export const AliradaProvider: React.FC<{ children: React.ReactNode }> = ({ child
     return () => unsub();
   }, []);
 
-  const isLiveFirestore = Boolean(firebaseUser && firebaseUser.emailVerified);
+  const isLiveFirestore = Boolean(
+    isFirebaseConfigured && firebaseDb && firebaseAuth && firebaseUser && firebaseUser.emailVerified
+  );
+  // Safe client reference only used inside isLiveFirestore / isFirebaseConfigured branches
+  const db = firebaseDb!;
   const signedEmailLower = (firebaseUser?.email || '').toLowerCase();
   const isRootAdmin = Boolean(isLiveFirestore && signedEmailLower === ROOT_ADMIN_EMAIL);
 
@@ -682,7 +694,7 @@ export const AliradaProvider: React.FC<{ children: React.ReactNode }> = ({ child
 
   // Subscribe to own /admins/{uid} doc & /admin_delegates when verified signed in
   useEffect(() => {
-    if (!isLiveFirestore || !firebaseUser) return;
+    if (!isLiveFirestore || !firebaseUser || !firebaseDb) return;
     const unsubs: (() => void)[] = [];
 
     unsubs.push(
@@ -1175,8 +1187,15 @@ export const AliradaProvider: React.FC<{ children: React.ReactNode }> = ({ child
 
   // Auth Methods
   const signInWithGoogle = async () => {
+    if (!isFirebaseConfigured || !firebaseAuth) {
+      pushToast(
+        'warning',
+        'Firebase config is not set in this build. Add VITE_FIREBASE_* or FIREBASE_APPLET_CONFIG in GitHub Secrets.'
+      );
+      return;
+    }
     try {
-      await signInWithPopup(auth, googleAuthProvider);
+      await signInWithPopup(firebaseAuth, googleAuthProvider);
       setAuthModalOpen(false);
       pushToast('success', 'Signed in to Alirada with Google.');
     } catch (error: unknown) {
@@ -1186,8 +1205,15 @@ export const AliradaProvider: React.FC<{ children: React.ReactNode }> = ({ child
   };
 
   const signInEmail = async (email: string, password: string) => {
+    if (!isFirebaseConfigured || !firebaseAuth) {
+      pushToast(
+        'warning',
+        'Firebase config is not set in this build. Add VITE_FIREBASE_* or FIREBASE_APPLET_CONFIG in GitHub Secrets.'
+      );
+      return;
+    }
     try {
-      const cred = await signInWithEmailAndPassword(auth, email.trim(), password);
+      const cred = await signInWithEmailAndPassword(firebaseAuth, email.trim(), password);
       if (!cred.user.emailVerified) {
         await sendEmailVerification(cred.user);
         pushToast('warning', 'Verification email sent. Please verify your email before writing records.');
@@ -1210,8 +1236,15 @@ export const AliradaProvider: React.FC<{ children: React.ReactNode }> = ({ child
     securityQuestion: string,
     securityAnswer: string
   ) => {
+    if (!isFirebaseConfigured || !firebaseAuth) {
+      pushToast(
+        'warning',
+        'Firebase config is not set in this build. Add VITE_FIREBASE_* or FIREBASE_APPLET_CONFIG in GitHub Secrets.'
+      );
+      return;
+    }
     try {
-      const cred = await createUserWithEmailAndPassword(auth, email.trim(), password);
+      const cred = await createUserWithEmailAndPassword(firebaseAuth, email.trim(), password);
       await sendEmailVerification(cred.user);
       const ansHash = securityAnswer ? await sha256Hex(securityAnswer) : '';
       const cleanAvatar =
@@ -1236,6 +1269,12 @@ export const AliradaProvider: React.FC<{ children: React.ReactNode }> = ({ child
     email: string,
     answer: string
   ): Promise<{ verified: boolean; message: string }> => {
+    if (!isFirebaseConfigured || !firebaseAuth) {
+      return {
+        verified: false,
+        message: 'Firebase config is not set in this build. Add VITE_FIREBASE_* or FIREBASE_APPLET_CONFIG in GitHub Secrets.',
+      };
+    }
     const cleanEmail = email.trim().toLowerCase();
     const target = profiles.find((p) => (p.email || '').toLowerCase() === cleanEmail);
     if (target && target.security_answer_hash) {
@@ -1245,7 +1284,7 @@ export const AliradaProvider: React.FC<{ children: React.ReactNode }> = ({ child
       }
     }
     try {
-      await sendPasswordResetEmail(auth, cleanEmail);
+      await sendPasswordResetEmail(firebaseAuth, cleanEmail);
       return {
         verified: true,
         message: 'Security check passed. A password reset link has been dispatched to your email.',
@@ -1262,7 +1301,8 @@ export const AliradaProvider: React.FC<{ children: React.ReactNode }> = ({ child
   };
 
   const signOutUser = async () => {
-    await signOut(auth);
+    if (!firebaseAuth) return;
+    await signOut(firebaseAuth);
     pushToast('success', 'Signed out cleanly.');
   };
 
@@ -3551,6 +3591,7 @@ export const AliradaProvider: React.FC<{ children: React.ReactNode }> = ({ child
       value={{
         firebaseUser,
         authReady,
+        isFirebaseConfigured,
         isLiveFirestore,
         isRootAdmin,
         isAdmin,

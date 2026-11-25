@@ -1,5 +1,6 @@
-import { initializeApp } from 'firebase/app';
+import { FirebaseApp, initializeApp } from 'firebase/app';
 import {
+  Auth,
   getAuth,
   GoogleAuthProvider,
   signInWithPopup,
@@ -9,12 +10,57 @@ import {
   sendEmailVerification,
   signOut,
 } from 'firebase/auth';
-import { getFirestore, doc, getDocFromServer } from 'firebase/firestore';
-import firebaseConfig from '../../firebase-applet-config.json';
+import { Firestore, getFirestore, doc, getDocFromServer } from 'firebase/firestore';
 
-const app = initializeApp(firebaseConfig);
-export const db = getFirestore(app, firebaseConfig.firestoreDatabaseId);
-export const auth = getAuth(app);
+interface FirebaseAppletConfig {
+  apiKey?: string;
+  authDomain?: string;
+  projectId?: string;
+  storageBucket?: string;
+  messagingSenderId?: string;
+  appId?: string;
+  firestoreDatabaseId?: string;
+}
+
+const configModules = import.meta.glob('../../firebase-applet-config.json', {
+  eager: true,
+  import: 'default',
+}) as Record<string, FirebaseAppletConfig>;
+
+const fileConfig: FirebaseAppletConfig = Object.values(configModules)[0] || {};
+
+const firebaseConfig = {
+  apiKey: import.meta.env.VITE_FIREBASE_API_KEY || fileConfig.apiKey || '',
+  authDomain: import.meta.env.VITE_FIREBASE_AUTH_DOMAIN || fileConfig.authDomain || '',
+  projectId: import.meta.env.VITE_FIREBASE_PROJECT_ID || fileConfig.projectId || '',
+  storageBucket: import.meta.env.VITE_FIREBASE_STORAGE_BUCKET || fileConfig.storageBucket || '',
+  messagingSenderId:
+    import.meta.env.VITE_FIREBASE_MESSAGING_SENDER_ID || fileConfig.messagingSenderId || '',
+  appId: import.meta.env.VITE_FIREBASE_APP_ID || fileConfig.appId || '',
+  firestoreDatabaseId:
+    import.meta.env.VITE_FIREBASE_DATABASE_ID || fileConfig.firestoreDatabaseId || '(default)',
+};
+
+export const isFirebaseConfigured = Boolean(
+  firebaseConfig.apiKey && firebaseConfig.projectId && firebaseConfig.appId
+);
+
+let app: FirebaseApp | null = null;
+let dbInstance: Firestore | null = null;
+let authInstance: Auth | null = null;
+
+if (isFirebaseConfigured) {
+  try {
+    app = initializeApp(firebaseConfig);
+    dbInstance = getFirestore(app, firebaseConfig.firestoreDatabaseId);
+    authInstance = getAuth(app);
+  } catch (err) {
+    console.warn('Firebase initialization skipped:', err);
+  }
+}
+
+export const db: Firestore | null = dbInstance;
+export const auth: Auth | null = authInstance;
 export const googleAuthProvider = new GoogleAuthProvider();
 googleAuthProvider.setCustomParameters({ prompt: 'select_account' });
 
@@ -49,16 +95,17 @@ export function handleFirestoreError(
   operationType: OperationType,
   path: string | null
 ): never {
+  const currentUser = auth?.currentUser;
   const errInfo: FirestoreErrorInfo = {
     error: error instanceof Error ? error.message : String(error),
     authInfo: {
-      userId: auth.currentUser?.uid ?? null,
-      email: auth.currentUser?.email ?? null,
-      emailVerified: auth.currentUser?.emailVerified ?? null,
-      isAnonymous: auth.currentUser?.isAnonymous ?? null,
-      tenantId: auth.currentUser?.tenantId ?? null,
+      userId: currentUser?.uid ?? null,
+      email: currentUser?.email ?? null,
+      emailVerified: currentUser?.emailVerified ?? null,
+      isAnonymous: currentUser?.isAnonymous ?? null,
+      tenantId: currentUser?.tenantId ?? null,
       providerInfo:
-        auth.currentUser?.providerData?.map((provider) => ({
+        currentUser?.providerData?.map((provider) => ({
           providerId: provider.providerId,
           email: provider.email,
         })) || [],
@@ -71,6 +118,7 @@ export function handleFirestoreError(
 }
 
 export async function testConnection(): Promise<boolean> {
+  if (!db) return false;
   try {
     await getDocFromServer(doc(db, 'test', 'connection'));
     return true;

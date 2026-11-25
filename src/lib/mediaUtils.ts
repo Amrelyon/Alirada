@@ -8,7 +8,7 @@ export const ALIRADA_LOGO_URL = 'https://i.imgur.com/LkCssoJ.png';
 export function isSafeHttpUrl(url?: string): boolean {
   if (!url) return false;
   const trimmed = url.trim();
-  if (trimmed.startsWith('/')) return true;
+  if (trimmed.startsWith('/') || trimmed.startsWith('./')) return true;
   try {
     const parsed = new URL(trimmed);
     return parsed.protocol === 'https:' || parsed.protocol === 'http:';
@@ -39,7 +39,11 @@ export function normalizeMediaImageUrl(rawUrl?: string): string {
   }
 
   if (url.startsWith('/src/assets/')) {
-    const base = (import.meta.env.BASE_URL || '/').replace(/\/$/, '');
+    const rawBase = import.meta.env.BASE_URL || '/';
+    if (rawBase === './' || rawBase === '.') {
+      return `.${url}`;
+    }
+    const base = rawBase.replace(/\/$/, '');
     return `${base}${url}`;
   }
 

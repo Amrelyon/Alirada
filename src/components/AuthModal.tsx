@@ -7,6 +7,7 @@ export const AuthModal: React.FC = () => {
   const {
     authModalOpen,
     setAuthModalOpen,
+    isFirebaseConfigured,
     signInWithGoogle,
     signInEmail,
     registerEmail,
@@ -65,6 +66,12 @@ export const AuthModal: React.FC = () => {
             <X className="w-5 h-5" />
           </button>
         </div>
+
+        {!isFirebaseConfigured && (
+          <div className="p-3 rounded-lg border border-amber-300 dark:border-amber-800 bg-amber-50 dark:bg-amber-950/40 text-xs text-amber-900 dark:text-amber-200 leading-relaxed">
+            Running in public preview mode without Firebase secrets configured. To enable live authentication on a public GitHub Pages deploy, add <code className="font-mono">FIREBASE_APPLET_CONFIG</code> (or <code className="font-mono">VITE_FIREBASE_*</code>) in GitHub Repository Secrets and authorize this domain in Firebase Auth.
+          </div>
+        )}
 
         <button
           type="button"
