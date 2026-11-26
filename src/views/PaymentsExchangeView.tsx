@@ -54,6 +54,8 @@ export const PaymentsExchangeView: React.FC = () => {
   const [triggerType, setTriggerType] = useState<TriggerType>('Order Creation');
   const [triggerPayload, setTriggerPayload] = useState('');
   const [issuedRef, setIssuedRef] = useState<TransactionRef | null>(null);
+  const [selectedApiRefCode, setSelectedApiRefCode] = useState<string | null>(null);
+  const [apiTab, setApiTab] = useState<'sdk' | 'embed' | 'url'>('sdk');
 
   // Redeem Ref Form
   const [redeemCode, setRedeemCode] = useState('');
@@ -208,13 +210,18 @@ export const PaymentsExchangeView: React.FC = () => {
       : undefined;
     const wp = encodeWidgetPreview(ref, linked, linkedProj?.name);
     const wpSuffix = wp ? `&wp=${encodeURIComponent(wp)}` : '';
+    const unitPts = linked ? linked.price_points : ref.points_amount;
     const directUrl = `${window.location.origin}/?pay_ref=${encodeURIComponent(ref.ref_code)}${wpSuffix}`;
     const prodUrl = `https://alirada.com/?pay_ref=${encodeURIComponent(ref.ref_code)}`;
+    const urlApi = `https://alirada.com/?pay_ref=${encodeURIComponent(ref.ref_code)}&qty=1&ext_ref=YOUR_ORDER_ID&return_url=${encodeURIComponent('https://your-service.com/payment-callback')}`;
     const embedUrl = `https://alirada.com/?pay_ref=${encodeURIComponent(ref.ref_code)}&embed=1${wpSuffix}`;
     const localEmbedUrl = `${window.location.origin}/?pay_ref=${encodeURIComponent(ref.ref_code)}&embed=1${wpSuffix}`;
     const iframeId = `alirada-c2p-${ref.ref_code.toLowerCase().replace(/[^a-z0-9-]/g, '')}`;
-    const html = `<iframe\n  id="${iframeId}"\n  src="${embedUrl}"\n  title="${(linked?.title || ref.widget_name || 'Alirada C2P Checkout').replace(/"/g, '&quot;')}"\n  width="100%"\n  height="680"\n  style="border:0;max-width:560px;border-radius:12px;overflow:hidden"\n  allow="clipboard-write"\n></iframe>\n<script>\nwindow.addEventListener('message', function (e) {\n  if (!e.data || e.data.ref_code !== '${ref.ref_code}') return;\n  if (e.data.type === 'ALIRADA_C2P_HEIGHT' && e.data.height) {\n    var el = document.getElementById('${iframeId}');\n    if (el) el.style.height = e.data.height + 'px';\n  }\n  if (e.data.type === 'ALIRADA_C2P_PAID' || e.data.type === 'ALIRADA_C2P_PAYMENT_CONFIRMED') {\n    console.log('Alirada C2P Paid:', e.data);\n  }\n});\n</script>`;
-    return { directUrl, prodUrl, embedUrl, localEmbedUrl, html };
+
+    const sdkSnippet = `<script src="https://alirada.com/c2p-sdk.js"></script>\n<button type="button" id="alirada-pay-btn-${ref.ref_code.toLowerCase()}">Pay ${unitPts} pts via Alirada</button>\n<script>\n  document.getElementById('alirada-pay-btn-${ref.ref_code.toLowerCase()}').addEventListener('click', async function () {\n    try {\n      const receipt = await window.AliradaC2P.pay({\n        refCode: '${ref.ref_code}',\n        previewToken: '${wp}',\n        quantity: 1,\n        externalOrderId: 'EXT-ORD-' + Date.now(),\n        note: 'Checkout from external service',\n        returnUrl: window.location.href\n      });\n      console.log('Alirada C2P Paid:', receipt);\n      // receipt = { ref_code, order_id, order_number, points_amount, payer_uid, issuer_uid, external_order_id, paid_at }\n    } catch (err) {\n      console.warn('Payment cancelled or incomplete:', err.message);\n    }\n  });\n</script>`;
+
+    const html = `<iframe\n  id="${iframeId}"\n  src="${embedUrl}"\n  title="${(linked?.title || ref.widget_name || 'Alirada C2P Checkout').replace(/"/g, '&quot;')}"\n  width="100%"\n  height="680"\n  style="border:0;max-width:560px;border-radius:12px;overflow:hidden"\n  allow="clipboard-write"\n></iframe>\n<script>\n// Trigger or configure from your external service:\n// document.getElementById('${iframeId}').contentWindow.postMessage({ type: 'ALIRADA_C2P_TRIGGER_PAY', ref_code: '${ref.ref_code}', quantity: 1, external_order_id: 'ORD-101' }, 'https://alirada.com');\nwindow.addEventListener('message', function (e) {\n  if (!e.data || e.data.ref_code !== '${ref.ref_code}') return;\n  if (e.data.type === 'ALIRADA_C2P_HEIGHT' && e.data.height) {\n    var el = document.getElementById('${iframeId}');\n    if (el) el.style.height = e.data.height + 'px';\n  }\n  if (e.data.type === 'ALIRADA_C2P_PAID' || e.data.type === 'ALIRADA_C2P_PAYMENT_CONFIRMED') {\n    console.log('Alirada C2P Paid:', e.data);\n  }\n});\n</script>`;
+    return { directUrl, prodUrl, urlApi, embedUrl, localEmbedUrl, sdkSnippet, html };
   };
 
   return (
@@ -428,10 +435,10 @@ export const PaymentsExchangeView: React.FC = () => {
                   </div>
                 </div>
                 {issuedRef.ref_type === 'C2P' && (
-                  <div className="space-y-2 pt-2 border-t border-stone-200 dark:border-stone-800">
+                  <div className="space-y-2.5 pt-2 border-t border-stone-200 dark:border-stone-800">
                     <div className="flex items-center justify-between flex-wrap gap-2">
                       <span className="inline-flex items-center gap-1 font-medium">
-                        <Code2 className="w-3.5 h-3.5" /> External Website Embed Widget & API Snippet
+                        <Code2 className="w-3.5 h-3.5" /> External Service C2P API & Embed
                       </span>
                       <div className="flex items-center gap-3 flex-wrap">
                         <a
@@ -449,17 +456,54 @@ export const PaymentsExchangeView: React.FC = () => {
                         >
                           Copy alirada.com Link
                         </button>
-                        <button
-                          type="button"
-                          onClick={() => copyText('snippet', buildWidgetSnippet(issuedRef).html)}
-                          className="text-xs text-[#B88B1E] dark:text-[#D4AF37] hover:underline"
-                        >
-                          Copy Embed HTML
-                        </button>
                       </div>
                     </div>
-                    <pre className="text-[11px] font-mono-tabular p-2 rounded bg-white dark:bg-[#12151B] border border-stone-200 dark:border-stone-800 overflow-x-auto">
-                      {buildWidgetSnippet(issuedRef).html}
+
+                    <div className="flex items-center justify-between gap-2 flex-wrap">
+                      <div className="flex items-center gap-1 p-0.5 rounded-md bg-white dark:bg-[#12151B] border border-stone-200 dark:border-stone-800">
+                        {(
+                          [
+                            ['sdk', 'JS Trigger API (SDK)'],
+                            ['embed', 'Embed + PostMessage'],
+                            ['url', 'Redirect Query API'],
+                          ] as const
+                        ).map(([tabKey, label]) => (
+                          <button
+                            key={tabKey}
+                            type="button"
+                            onClick={() => setApiTab(tabKey)}
+                            className={`px-2 py-1 text-[11px] font-medium rounded ${
+                              apiTab === tabKey
+                                ? 'bg-[#B88B1E] dark:bg-[#D4AF37] text-white dark:text-stone-950'
+                                : 'text-stone-600 dark:text-stone-300'
+                            }`}
+                          >
+                            {label}
+                          </button>
+                        ))}
+                      </div>
+                      <button
+                        type="button"
+                        onClick={() => {
+                          const s = buildWidgetSnippet(issuedRef);
+                          copyText(
+                            'snippet',
+                            apiTab === 'sdk' ? s.sdkSnippet : apiTab === 'embed' ? s.html : s.urlApi
+                          );
+                        }}
+                        className="text-xs text-[#B88B1E] dark:text-[#D4AF37] hover:underline inline-flex items-center gap-1"
+                      >
+                        {copiedId === 'snippet' ? <Check className="w-3.5 h-3.5" /> : <Copy className="w-3.5 h-3.5" />}
+                        Copy Active Code
+                      </button>
+                    </div>
+
+                    <pre className="text-[11px] font-mono-tabular p-2.5 rounded bg-white dark:bg-[#12151B] border border-stone-200 dark:border-stone-800 overflow-x-auto max-h-60">
+                      {apiTab === 'sdk'
+                        ? buildWidgetSnippet(issuedRef).sdkSnippet
+                        : apiTab === 'embed'
+                          ? buildWidgetSnippet(issuedRef).html
+                          : buildWidgetSnippet(issuedRef).urlApi}
                     </pre>
                   </div>
                 )}
@@ -551,16 +595,20 @@ export const PaymentsExchangeView: React.FC = () => {
                             </button>
                             <button
                               type="button"
-                              onClick={() => copyText(`embed_${ref.id}`, buildWidgetSnippet(ref).html)}
-                              className="px-2 py-1 rounded-md border border-stone-300 dark:border-stone-700 text-stone-700 dark:text-stone-200 hover:bg-stone-100 dark:hover:bg-stone-800 inline-flex items-center gap-1"
-                              title="Copy External Website Embed HTML & API Listener"
+                              onClick={() =>
+                                setSelectedApiRefCode((prev) =>
+                                  prev === ref.ref_code ? null : ref.ref_code
+                                )
+                              }
+                              className={`px-2 py-1 rounded-md border inline-flex items-center gap-1 ${
+                                selectedApiRefCode === ref.ref_code
+                                  ? 'border-[#B88B1E] dark:border-[#D4AF37] text-[#B88B1E] dark:text-[#D4AF37] bg-[#B88B1E]/10'
+                                  : 'border-stone-300 dark:border-stone-700 text-stone-700 dark:text-stone-200 hover:bg-stone-100 dark:hover:bg-stone-800'
+                              }`}
+                              title="View JS SDK, Embed HTML, and Query API Docs"
                             >
-                              {copiedId === `embed_${ref.id}` ? (
-                                <Check className="w-3 h-3 text-emerald-500" />
-                              ) : (
-                                <Code2 className="w-3 h-3" />
-                              )}
-                              Embed Code
+                              <Code2 className="w-3 h-3" />
+                              API / Embed
                             </button>
                           </>
                         )}
@@ -608,6 +656,80 @@ export const PaymentsExchangeView: React.FC = () => {
                   );
                 })}
               </div>
+
+              {selectedApiRefCode && (() => {
+                const targetRef = transactionRefs.find((r) => r.ref_code === selectedApiRefCode);
+                if (!targetRef || targetRef.ref_type !== 'C2P') return null;
+                const s = buildWidgetSnippet(targetRef);
+                const codeContent =
+                  apiTab === 'sdk' ? s.sdkSnippet : apiTab === 'embed' ? s.html : s.urlApi;
+                return (
+                  <div className="mt-3 p-4 rounded-xl border border-stone-200 dark:border-stone-800 bg-stone-50 dark:bg-[#0B0D10] space-y-2.5 text-xs">
+                    <div className="flex items-center justify-between gap-2 flex-wrap">
+                      <span className="font-mono-tabular font-semibold text-stone-900 dark:text-stone-100">
+                        External API Integration · {targetRef.ref_code}
+                      </span>
+                      <div className="flex items-center gap-2">
+                        <a
+                          href={s.localEmbedUrl}
+                          target="_blank"
+                          rel="noopener noreferrer"
+                          className="text-[11px] text-emerald-700 dark:text-emerald-400 hover:underline inline-flex items-center gap-1"
+                        >
+                          <ExternalLink className="w-3 h-3" /> Test Embed
+                        </a>
+                        <button
+                          type="button"
+                          onClick={() => setSelectedApiRefCode(null)}
+                          className="p-1 text-stone-500 hover:text-stone-900 dark:hover:text-stone-100"
+                          aria-label="Close API panel"
+                        >
+                          <X className="w-3.5 h-3.5" />
+                        </button>
+                      </div>
+                    </div>
+                    <div className="flex items-center justify-between gap-2 flex-wrap">
+                      <div className="flex items-center gap-1 p-0.5 rounded-md bg-white dark:bg-[#12151B] border border-stone-200 dark:border-stone-800">
+                        {(
+                          [
+                            ['sdk', 'JS SDK (AliradaC2P.pay)'],
+                            ['embed', 'Embed + Trigger API'],
+                            ['url', 'Direct Query URL'],
+                          ] as const
+                        ).map(([tabKey, label]) => (
+                          <button
+                            key={tabKey}
+                            type="button"
+                            onClick={() => setApiTab(tabKey)}
+                            className={`px-2 py-1 text-[11px] font-medium rounded ${
+                              apiTab === tabKey
+                                ? 'bg-[#B88B1E] dark:bg-[#D4AF37] text-white dark:text-stone-950'
+                                : 'text-stone-600 dark:text-stone-300'
+                            }`}
+                          >
+                            {label}
+                          </button>
+                        ))}
+                      </div>
+                      <button
+                        type="button"
+                        onClick={() => copyText(`api_${targetRef.id}`, codeContent)}
+                        className="text-xs text-[#B88B1E] dark:text-[#D4AF37] hover:underline inline-flex items-center gap-1"
+                      >
+                        {copiedId === `api_${targetRef.id}` ? (
+                          <Check className="w-3.5 h-3.5" />
+                        ) : (
+                          <Copy className="w-3.5 h-3.5" />
+                        )}
+                        Copy Code
+                      </button>
+                    </div>
+                    <pre className="text-[11px] font-mono-tabular p-2.5 rounded bg-white dark:bg-[#12151B] border border-stone-200 dark:border-stone-800 overflow-x-auto max-h-60">
+                      {codeContent}
+                    </pre>
+                  </div>
+                );
+              })()}
             </div>
           </div>
         </div>

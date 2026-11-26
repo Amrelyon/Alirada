@@ -141,6 +141,7 @@ interface AliradaContextValue {
   activeSection: AppSection;
   setActiveSection: (s: AppSection) => void;
   theme: 'dark' | 'light';
+  setTheme: (next: 'dark' | 'light') => void;
   toggleTheme: () => void;
   inspectedUid: string | null;
   setInspectedUid: (uid: string | null) => void;
@@ -312,13 +313,19 @@ interface AliradaContextValue {
   redeemTransactionRef: (
     refCode: string,
     quantity?: number,
-    orderDetails?: { google_map_link?: string; notes?: string }
+    orderDetails?: {
+      google_map_link?: string;
+      notes?: string;
+      external_order_id?: string;
+      return_url?: string;
+    }
   ) => Promise<{
     ok: boolean;
     ref?: TransactionRef;
     order?: Order;
     settledPoints?: number;
-    triggerExecuted?: { type: string; payload?: string };
+    externalOrderId?: string;
+    triggerExecuted?: { type: string; payload?: string; returnUrl?: string };
     message: string;
   }>;
   deactivateTransactionRef: (id: string, nextStatus: 'Deactivated' | 'Cancelled') => Promise<boolean>;
@@ -446,7 +453,13 @@ export const AliradaProvider: React.FC<{ children: React.ReactNode }> = ({ child
   const [authReady, setAuthReady] = useState(false);
 
   const [activeSection, setActiveSection] = useState<AppSection>('home');
-  const [theme, setTheme] = useState<'dark' | 'light'>('dark');
+  const [theme, setTheme] = useState<'dark' | 'light'>(() => {
+    if (typeof window !== 'undefined') {
+      const param = new URLSearchParams(window.location.search).get('theme');
+      if (param === 'light' || param === 'dark') return param;
+    }
+    return 'dark';
+  });
   const [inspectedUid, setInspectedUid] = useState<string | null>(null);
   const [authModalOpen, setAuthModalOpen] = useState(false);
   const [reportModalTarget, setReportModalTarget] = useState<{
@@ -3190,6 +3203,15 @@ export const AliradaProvider: React.FC<{ children: React.ReactNode }> = ({ child
       typeof window !== 'undefined' ? window.location.origin : 'https://alirada.com';
     const payLink = `${origin}/?pay_ref=${encodeURIComponent(code)}`;
 
+    const cleanExtOrderId = orderDetails?.external_order_id?.trim() || '';
+    const cleanReturnUrl = sanitizeExternalLink(orderDetails?.return_url) || '';
+    const composedNotes = [
+      orderDetails?.notes?.trim(),
+      cleanExtOrderId ? `External Ref: ${cleanExtOrderId}` : '',
+    ]
+      .filter(Boolean)
+      .join(' · ');
+
     // Create linked Order whenever C2P is connected to a Marketplace Listing
     let createdOrder: Order | null = null;
     if (linkedOrderListing && linkedOrderListing.owner_uid !== currentProfile.universal_id) {
@@ -3197,7 +3219,7 @@ export const AliradaProvider: React.FC<{ children: React.ReactNode }> = ({ child
         listing: linkedOrderListing,
         quantity: cleanQty,
         google_map_link: orderDetails?.google_map_link,
-        notes: orderDetails?.notes || `Settled via C2P reference ${code}`,
+        notes: composedNotes || `Settled via C2P reference ${code}`,
         c2p_ref_code: code,
         c2p_payment_link: payLink,
         trigger_type: ref.trigger_type,
@@ -3290,6 +3312,8 @@ export const AliradaProvider: React.FC<{ children: React.ReactNode }> = ({ child
       listing_code: ref.linked_listing_code || '',
       order_id: createdOrder?.id || '',
       order_number: createdOrder?.order_number || '',
+      external_order_id: cleanExtOrderId,
+      return_url: cleanReturnUrl,
       trigger_type: ref.trigger_type,
       trigger_payload: ref.trigger_payload || '',
       paid_at: confirmedAt,
@@ -3340,9 +3364,14 @@ export const AliradaProvider: React.FC<{ children: React.ReactNode }> = ({ child
       },
       order: createdOrder || undefined,
       settledPoints,
+      externalOrderId: cleanExtOrderId || undefined,
       triggerExecuted:
-        ref.trigger_type !== 'None'
-          ? { type: ref.trigger_type, payload: ref.trigger_payload }
+        ref.trigger_type !== 'None' || cleanReturnUrl
+          ? {
+              type: ref.trigger_type,
+              payload: ref.trigger_payload,
+              returnUrl: cleanReturnUrl || undefined,
+            }
           : undefined,
       message: createdOrder
         ? `Confirmed ${settledPoints} pts & created order ${createdOrder.order_number}.`
@@ -4230,6 +4259,7 @@ export const AliradaProvider: React.FC<{ children: React.ReactNode }> = ({ child
         activeSection,
         setActiveSection,
         theme,
+        setTheme,
         toggleTheme,
         inspectedUid,
         setInspectedUid,

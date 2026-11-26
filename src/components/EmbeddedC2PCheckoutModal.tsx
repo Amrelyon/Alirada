@@ -44,6 +44,7 @@ export const EmbeddedC2PCheckoutModal: React.FC<EmbeddedC2PCheckoutModalProps> =
     isLiveFirestore,
     setAuthModalOpen,
     setInspectedUid,
+    setTheme,
     currentProfile,
     pushToast,
   } = useAlirada();
@@ -55,16 +56,29 @@ export const EmbeddedC2PCheckoutModal: React.FC<EmbeddedC2PCheckoutModalProps> =
   const [quantity, setQuantity] = useState(1);
   const [mapLink, setMapLink] = useState('');
   const [notes, setNotes] = useState('');
+  const [externalOrderId, setExternalOrderId] = useState('');
+  const [returnUrl, setReturnUrl] = useState('');
   const [submitting, setSubmitting] = useState(false);
   const [receipt, setReceipt] = useState<{
     order?: Order;
     settledPoints: number;
+    externalOrderId?: string;
     triggerType?: string;
     triggerPayload?: string;
+    returnUrl?: string;
     message: string;
   } | null>(null);
 
   const cardRef = useRef<HTMLDivElement | null>(null);
+  const commandActionRef = useRef<
+    (overrides?: {
+      quantity?: number;
+      note?: string;
+      map_link?: string;
+      external_order_id?: string;
+      return_url?: string;
+    }) => Promise<void>
+  >(async () => {});
   const isEmbed = mode === 'embed';
   const normalizedCode = (activeCheckoutRefCode || '').trim().toUpperCase();
 
@@ -89,9 +103,21 @@ export const EmbeddedC2PCheckoutModal: React.FC<EmbeddedC2PCheckoutModalProps> =
   useEffect(() => {
     setCarouselIdx(0);
     setShowVideo(false);
-    setQuantity(1);
-    setMapLink('');
-    setNotes('');
+    if (typeof window !== 'undefined') {
+      const params = new URLSearchParams(window.location.search);
+      const urlQty = Number(params.get('qty') || 1);
+      setQuantity(Number.isFinite(urlQty) && urlQty >= 1 ? Math.min(100, Math.round(urlQty)) : 1);
+      setMapLink(sanitizeExternalLink(params.get('map_link') || undefined) || '');
+      setNotes((params.get('note') || '').trim());
+      setExternalOrderId((params.get('ext_ref') || '').trim());
+      setReturnUrl(sanitizeExternalLink(params.get('return_url') || undefined) || '');
+    } else {
+      setQuantity(1);
+      setMapLink('');
+      setNotes('');
+      setExternalOrderId('');
+      setReturnUrl('');
+    }
     setReceipt(null);
     setFetchedRef(null);
   }, [normalizedCode]);
@@ -151,9 +177,75 @@ export const EmbeddedC2PCheckoutModal: React.FC<EmbeddedC2PCheckoutModalProps> =
     return () => ro.disconnect();
   }, [isEmbed, normalizedCode, refRecord, receipt, isLiveFirestore, loadingRef, showVideo]);
 
+  // Incoming Command API listener for external services controlling the widget via postMessage
+  useEffect(() => {
+    if (typeof window === 'undefined' || !normalizedCode) return;
+    const onMessage = (event: MessageEvent) => {
+      const data = event.data as Record<string, unknown> | null;
+      if (!data || typeof data !== 'object') return;
+      const targetRef = typeof data.ref_code === 'string' ? data.ref_code.trim().toUpperCase() : '';
+      if (targetRef && targetRef !== normalizedCode) return;
+
+      if (data.type === 'ALIRADA_C2P_SET_QUANTITY') {
+        const nextQty = Number(data.quantity);
+        if (Number.isFinite(nextQty) && nextQty >= 1) {
+          setQuantity(Math.min(100, Math.round(nextQty)));
+        }
+      } else if (data.type === 'ALIRADA_C2P_CONFIGURE') {
+        if (data.quantity != null) {
+          const nextQty = Number(data.quantity);
+          if (Number.isFinite(nextQty) && nextQty >= 1) {
+            setQuantity(Math.min(100, Math.round(nextQty)));
+          }
+        }
+        if (typeof data.note === 'string') setNotes(data.note.trim());
+        if (typeof data.map_link === 'string') {
+          setMapLink(sanitizeExternalLink(data.map_link) || '');
+        }
+        if (typeof data.external_order_id === 'string') {
+          setExternalOrderId(data.external_order_id.trim());
+        }
+        if (typeof data.return_url === 'string') {
+          setReturnUrl(sanitizeExternalLink(data.return_url) || '');
+        }
+        if (data.theme === 'light' || data.theme === 'dark') {
+          setTheme(data.theme);
+        }
+      } else if (data.type === 'ALIRADA_C2P_RESET') {
+        setReceipt(null);
+      } else if (data.type === 'ALIRADA_C2P_TRIGGER_PAY') {
+        void commandActionRef.current({
+          quantity: data.quantity != null ? Number(data.quantity) : undefined,
+          note: typeof data.note === 'string' ? data.note : undefined,
+          map_link: typeof data.map_link === 'string' ? data.map_link : undefined,
+          external_order_id:
+            typeof data.external_order_id === 'string' ? data.external_order_id : undefined,
+          return_url: typeof data.return_url === 'string' ? data.return_url : undefined,
+        });
+      }
+    };
+    window.addEventListener('message', onMessage);
+    return () => window.removeEventListener('message', onMessage);
+  }, [normalizedCode, setTheme]);
+
   if (!activeCheckoutRefCode) return null;
 
+  const notifyParent = (payload: Record<string, unknown>) => {
+    if (typeof window === 'undefined') return;
+    try {
+      if (window.parent && window.parent !== window) {
+        window.parent.postMessage(payload, '*');
+      }
+      if (window.opener && window.opener !== window) {
+        window.opener.postMessage(payload, '*');
+      }
+    } catch {
+      // non-fatal postMessage
+    }
+  };
+
   const closeCheckout = () => {
+    notifyParent({ type: 'ALIRADA_C2P_CLOSED', ref_code: normalizedCode });
     if (isEmbed) {
       exitEmbedMode();
       return;
@@ -237,9 +329,46 @@ export const EmbeddedC2PCheckoutModal: React.FC<EmbeddedC2PCheckoutModalProps> =
     currentProfile.universal_id !== 'GUEST' &&
     projectedBalance < systemConfig.negative_points_floor;
 
+  const buildReturnServiceUrl = (
+    rawUrl: string | undefined,
+    settledPts: number,
+    orderObj?: Order,
+    extId?: string
+  ): string => {
+    const clean = sanitizeExternalLink(rawUrl);
+    if (!clean) return '';
+    try {
+      const u = new URL(clean);
+      u.searchParams.set('alirada_paid', '1');
+      u.searchParams.set('ref_code', normalizedCode);
+      if (orderObj?.order_number) u.searchParams.set('order_number', orderObj.order_number);
+      u.searchParams.set('points', String(settledPts));
+      u.searchParams.set('payer_uid', currentProfile.universal_id);
+      if (extId) u.searchParams.set('ext_ref', extId);
+      return u.toString();
+    } catch {
+      return clean;
+    }
+  };
+
   const cleanRedirectUrl =
     receipt?.triggerType === 'Redirect URL' && receipt.triggerPayload
-      ? sanitizeExternalLink(receipt.triggerPayload)
+      ? buildReturnServiceUrl(
+          receipt.triggerPayload,
+          receipt.settledPoints,
+          receipt.order,
+          receipt.externalOrderId
+        )
+      : '';
+
+  const cleanServiceReturnUrl =
+    receipt?.returnUrl && receipt.returnUrl !== receipt.triggerPayload
+      ? buildReturnServiceUrl(
+          receipt.returnUrl,
+          receipt.settledPoints,
+          receipt.order,
+          receipt.externalOrderId
+        )
       : '';
 
   const standaloneTabUrl =
@@ -247,41 +376,96 @@ export const EmbeddedC2PCheckoutModal: React.FC<EmbeddedC2PCheckoutModalProps> =
       ? `${window.location.origin}/?pay_ref=${encodeURIComponent(normalizedCode)}`
       : `https://alirada.com/?pay_ref=${encodeURIComponent(normalizedCode)}`;
 
-  const handlePaySubmit = async (e: React.FormEvent) => {
-    e.preventDefault();
+  const executePayment = async (overrides?: {
+    quantity?: number;
+    note?: string;
+    map_link?: string;
+    external_order_id?: string;
+    return_url?: string;
+  }) => {
+    const effectiveQty =
+      overrides?.quantity != null && Number.isFinite(overrides.quantity) && overrides.quantity >= 1
+        ? Math.min(100, Math.round(overrides.quantity))
+        : cleanQty;
+    if (overrides?.quantity != null) setQuantity(effectiveQty);
+
+    const effectiveNote = overrides?.note !== undefined ? overrides.note.trim() : notes;
+    if (overrides?.note !== undefined) setNotes(effectiveNote);
+
+    const effectiveMap =
+      overrides?.map_link !== undefined
+        ? sanitizeExternalLink(overrides.map_link) || ''
+        : mapLink;
+    if (overrides?.map_link !== undefined) setMapLink(effectiveMap);
+
+    const effectiveExtId =
+      overrides?.external_order_id !== undefined
+        ? overrides.external_order_id.trim()
+        : externalOrderId;
+    if (overrides?.external_order_id !== undefined) setExternalOrderId(effectiveExtId);
+
+    const effectiveReturn =
+      overrides?.return_url !== undefined
+        ? sanitizeExternalLink(overrides.return_url) || ''
+        : returnUrl;
+    if (overrides?.return_url !== undefined) setReturnUrl(effectiveReturn);
+
     if (!refRecord || submitting) return;
     if (!isLiveFirestore) {
       setAuthModalOpen(true);
       pushToast('warning', 'Please sign in with a verified email account to complete this payment.');
+      notifyParent({
+        type: 'ALIRADA_C2P_AUTH_REQUIRED',
+        ref_code: normalizedCode,
+        message: 'Verified Alirada sign-in required.',
+      });
       return;
     }
-    if (exceedsFloor) {
-      pushToast(
-        'error',
-        `Payment exceeds negative points floor (${systemConfig.negative_points_floor} pts).`
-      );
+
+    const effectiveTotal = Number((unitPoints * effectiveQty).toFixed(2));
+    const effectiveProjected = Number((myBalance - effectiveTotal).toFixed(2));
+    if (
+      currentProfile.universal_id !== 'GUEST' &&
+      effectiveProjected < systemConfig.negative_points_floor
+    ) {
+      const msg = `Payment exceeds negative points floor (${systemConfig.negative_points_floor} pts).`;
+      pushToast('error', msg);
+      notifyParent({ type: 'ALIRADA_C2P_ERROR', ref_code: normalizedCode, message: msg });
       return;
     }
+
     setSubmitting(true);
     try {
-      const res = await redeemTransactionRef(refRecord.ref_code, cleanQty, {
-        google_map_link: mapLink,
-        notes,
+      const res = await redeemTransactionRef(refRecord.ref_code, effectiveQty, {
+        google_map_link: effectiveMap,
+        notes: effectiveNote,
+        external_order_id: effectiveExtId,
+        return_url: effectiveReturn,
       });
       if (!res.ok) {
         pushToast('error', res.message);
+        notifyParent({ type: 'ALIRADA_C2P_ERROR', ref_code: normalizedCode, message: res.message });
       } else {
         setReceipt({
           order: res.order,
-          settledPoints: res.settledPoints ?? totalPoints,
+          settledPoints: res.settledPoints ?? effectiveTotal,
+          externalOrderId: res.externalOrderId,
           triggerType: res.triggerExecuted?.type,
           triggerPayload: res.triggerExecuted?.payload,
+          returnUrl: res.triggerExecuted?.returnUrl,
           message: res.message,
         });
       }
     } finally {
       setSubmitting(false);
     }
+  };
+
+  commandActionRef.current = executePayment;
+
+  const handlePaySubmit = async (e: React.FormEvent) => {
+    e.preventDefault();
+    await executePayment();
   };
 
   const cardContent = (
@@ -543,13 +727,18 @@ export const EmbeddedC2PCheckoutModal: React.FC<EmbeddedC2PCheckoutModalProps> =
             )}
 
             {/* API / Integration Notice */}
-            <div className="text-[11px] text-stone-500 dark:text-stone-400 flex items-center justify-between gap-2 px-1">
+            <div className="text-[11px] text-stone-500 dark:text-stone-400 flex flex-wrap items-center justify-between gap-2 px-1">
               <span className="inline-flex items-center gap-1.5">
                 <Code2 className="w-3.5 h-3.5 text-[#B88B1E] dark:text-[#D4AF37]" />
                 External Trigger:{' '}
                 <strong className="text-stone-800 dark:text-stone-200">
                   {effectiveTriggerType}
                 </strong>
+                {externalOrderId && (
+                  <span className="font-mono-tabular text-[#B88B1E] dark:text-[#D4AF37]">
+                    · Service Ref: {externalOrderId}
+                  </span>
+                )}
               </span>
               <span className="font-mono-tabular">Unit: {unitPoints} pts</span>
             </div>
@@ -570,6 +759,11 @@ export const EmbeddedC2PCheckoutModal: React.FC<EmbeddedC2PCheckoutModalProps> =
                       <p className="font-mono-tabular text-emerald-700 dark:text-emerald-300">
                         Linked Order: {receipt.order.order_number} · Recorded under Buyer (
                         {receipt.order.buyer_uid}) & Seller ({receipt.order.seller_uid})
+                      </p>
+                    )}
+                    {receipt.externalOrderId && (
+                      <p className="font-mono-tabular text-emerald-700 dark:text-emerald-300">
+                        External Service Ref: {receipt.externalOrderId}
                       </p>
                     )}
                     <p className="text-emerald-700 dark:text-emerald-300">
@@ -593,6 +787,16 @@ export const EmbeddedC2PCheckoutModal: React.FC<EmbeddedC2PCheckoutModalProps> =
                       className="px-3.5 py-2 rounded-lg bg-emerald-600 text-white font-semibold inline-flex items-center gap-1.5 hover:bg-emerald-700"
                     >
                       Continue to External Website <ExternalLink className="w-3.5 h-3.5" />
+                    </a>
+                  )}
+                  {cleanServiceReturnUrl && (
+                    <a
+                      href={cleanServiceReturnUrl}
+                      target="_top"
+                      rel="noopener noreferrer"
+                      className="px-3.5 py-2 rounded-lg bg-emerald-600 text-white font-semibold inline-flex items-center gap-1.5 hover:bg-emerald-700"
+                    >
+                      Return to Service <ExternalLink className="w-3.5 h-3.5" />
                     </a>
                   )}
                   {isEmbed ? (
