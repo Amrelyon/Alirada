@@ -1,5 +1,5 @@
 import React, { useMemo, useState } from 'react';
-import { CheckCircle2, ChevronLeft, ChevronRight, ExternalLink, Flag, MapPin, Play, Plus, Search, Trash2, TrendingUp, X } from 'lucide-react';
+import { ChevronLeft, ChevronRight, ExternalLink, Flag, Link2, MapPin, Play, Power, Plus, Search, Trash2, X } from 'lucide-react';
 import { getEffectiveListingAvailability, useAlirada } from '../context/AliradaContext';
 import { computeListingDemandCount } from '../lib/ledgerMath';
 import { getEmbeddableVideoUrl, normalizeMediaImageUrl } from '../lib/mediaUtils';
@@ -11,24 +11,23 @@ export const MarketplaceView: React.FC = () => {
     isLiveFirestore,
     currentProfile,
     isAdmin,
-    metricsMap,
     listings,
+    projects,
     orders,
-    investments,
     systemConfig,
     setAuthModalOpen,
     pushToast,
     createListing,
+    deactivateListing,
     deleteListing,
-    activateListingForOrders,
     placeOrder,
     confirmOrderDelivery,
-    investInListing,
     setInspectedUid,
     setReportModalTarget,
+    setActiveCheckoutRefCode,
   } = useAlirada();
 
-  const [subTab, setSubTab] = useState<'browse' | 'orders' | 'investments'>('browse');
+  const [subTab, setSubTab] = useState<'browse' | 'orders'>('browse');
   const [search, setSearch] = useState('');
   const [typeFilter, setTypeFilter] = useState<'All' | 'Product' | 'Service' | 'Course'>('All');
   const [carouselIdx, setCarouselIdx] = useState<Record<string, number>>({});
@@ -36,14 +35,12 @@ export const MarketplaceView: React.FC = () => {
   // Modals & Submit Locks
   const [createOpen, setCreateOpen] = useState(false);
   const [orderModalListing, setOrderModalListing] = useState<Listing | null>(null);
-  const [investModalListing, setInvestModalListing] = useState<Listing | null>(null);
   const [videoModalUrl, setVideoModalUrl] = useState<string | null>(null);
   const [deliveryModalOrder, setDeliveryModalOrder] = useState<Order | null>(null);
   const [submittingCreate, setSubmittingCreate] = useState(false);
   const [submittingOrder, setSubmittingOrder] = useState(false);
-  const [submittingInvest, setSubmittingInvest] = useState(false);
   const [submittingDelivery, setSubmittingDelivery] = useState(false);
-  const [activatingListingId, setActivatingListingId] = useState<string | null>(null);
+  const [togglingDeactivateId, setTogglingDeactivateId] = useState<string | null>(null);
 
   // Create Listing Form
   const [newType, setNewType] = useState<'Product' | 'Service' | 'Course'>('Product');
@@ -58,24 +55,27 @@ export const MarketplaceView: React.FC = () => {
   const [newMapLink, setNewMapLink] = useState('');
   const [newImagesRaw, setNewImagesRaw] = useState('/src/assets/images/listing_artisan_craft_1795619022780.jpg');
   const [newVideoUrl, setNewVideoUrl] = useState('');
-  const [newGoalPts, setNewGoalPts] = useState(500);
-  const [requireFundingFirst, setRequireFundingFirst] = useState(true);
-  const [newBudgetUrl, setNewBudgetUrl] = useState('');
-  const [newDeckUrl, setNewDeckUrl] = useState('');
+  const [newLinkedProjectId, setNewLinkedProjectId] = useState('');
 
   // Order Confirmation Form
   const [orderQty, setOrderQty] = useState(1);
   const [orderMap, setOrderMap] = useState('');
   const [orderNotes, setOrderNotes] = useState('');
 
-  // Investment Form
-  const [investAmount, setInvestAmount] = useState(100);
-
   // Delivery Confirmation Form
   const [delStatus, setDelStatus] = useState<'Delivered' | 'Partially Delivered' | 'Rejected'>('Delivered');
   const [delEvidence, setDelEvidence] = useState('');
   const [delNotes, setDelNotes] = useState('');
   const [delRejectionReason, setDelRejectionReason] = useState('');
+
+  const sortedLinkableProjects = useMemo(() => {
+    const uid = currentProfile.universal_id;
+    return [...projects].sort((a, b) => {
+      const aMine = a.owner_uid === uid || a.members.includes(uid) ? 0 : 1;
+      const bMine = b.owner_uid === uid || b.members.includes(uid) ? 0 : 1;
+      return aMine - bMine || a.name.localeCompare(b.name);
+    });
+  }, [projects, currentProfile.universal_id]);
 
   const filteredListings = useMemo(() => {
     const q = search.trim().toLowerCase();
@@ -112,15 +112,14 @@ export const MarketplaceView: React.FC = () => {
         price_points: Number((newHours * newHardship).toFixed(2)),
         payment_model: newPaymentModel,
         end_date: newEndDate || undefined,
-        investment_goal_points: newGoalPts > 0 ? newGoalPts : undefined,
-        availability_status: newGoalPts > 0 && requireFundingFirst ? 'Funding' : 'Active',
-        budget_doc_url: newBudgetUrl,
-        presentation_url: newDeckUrl,
+        linked_project_id: newLinkedProjectId || undefined,
+        availability_status: 'Active',
       });
       if (ok) {
         setCreateOpen(false);
         setNewTitle('');
         setNewDescription('');
+        setNewLinkedProjectId('');
       }
     } finally {
       setSubmittingCreate(false);
@@ -132,33 +131,19 @@ export const MarketplaceView: React.FC = () => {
     if (!orderModalListing || submittingOrder) return;
     setSubmittingOrder(true);
     try {
-      const ok = await placeOrder({
+      const ord = await placeOrder({
         listing: orderModalListing,
         quantity: orderQty,
         google_map_link: orderMap,
         notes: orderNotes,
       });
-      if (ok) {
+      if (ord) {
         setOrderModalListing(null);
         setOrderQty(1);
         setOrderNotes('');
       }
     } finally {
       setSubmittingOrder(false);
-    }
-  };
-
-  const handleInvestSubmit = async (e: React.FormEvent) => {
-    e.preventDefault();
-    if (!investModalListing || submittingInvest) return;
-    setSubmittingInvest(true);
-    try {
-      const ok = await investInListing(investModalListing, Number(investAmount));
-      if (ok) {
-        setInvestModalListing(null);
-      }
-    } finally {
-      setSubmittingInvest(false);
     }
   };
 
@@ -198,10 +183,10 @@ export const MarketplaceView: React.FC = () => {
       <div className="flex flex-col md:flex-row md:items-center justify-between gap-4">
         <div>
           <h1 className="font-cinzel text-2xl font-bold text-stone-900 dark:text-stone-100">
-            Marketplace & Crowdfunding
+            Marketplace & Delivery Settlement
           </h1>
           <p className="text-xs text-stone-500 dark:text-stone-400">
-            Point prices anchored to Production Hours × Hardship · Proportional dividends settle on delivery
+            Point prices anchored to Production Hours × Hardship · Link listings to Investment Projects for real-time revenue
           </p>
         </div>
 
@@ -211,7 +196,6 @@ export const MarketplaceView: React.FC = () => {
               [
                 ['browse', 'Browse Listings'],
                 ['orders', `Orders & Delivery (${orders.length})`],
-                ['investments', `Investments (${investments.length})`],
               ] as const
             ).map(([k, label]) => (
               <button
@@ -287,15 +271,13 @@ export const MarketplaceView: React.FC = () => {
               const idx = carouselIdx[item.id] || 0;
               const currentImg = images[idx] ? normalizeMediaImageUrl(images[idx]) : '';
               const demand = computeListingDemandCount(item.id, orders);
-              const totalInvested = investments
-                .filter((i) => i.listing_id === item.id && i.status === 'Active')
-                .reduce((acc, i) => acc + i.invested_points, 0);
-              const goal = item.investment_goal_points || 0;
-              const progressPct = goal > 0 ? Math.min(100, Math.round((totalInvested / goal) * 100)) : 0;
-              const effectiveAvailability = getEffectiveListingAvailability(item, investments);
-              const isFundingPhase = effectiveAvailability === 'Funding';
+              const effectiveAvailability = getEffectiveListingAvailability(item);
+              const isDeactivated = effectiveAvailability === 'Deactivated';
               const isOwn = item.owner_uid === currentProfile.universal_id;
               const videoEmbed = getEmbeddableVideoUrl(item.video_url);
+              const linkedProject = item.linked_project_id
+                ? projects.find((p) => p.id === item.linked_project_id)
+                : undefined;
 
               return (
                 <article
@@ -357,20 +339,32 @@ export const MarketplaceView: React.FC = () => {
                         </p>
                         <span
                           className={
-                            isFundingPhase
-                              ? 'text-amber-700 dark:text-amber-400 font-medium shrink-0'
+                            isDeactivated
+                              ? 'text-rose-700 dark:text-rose-400 font-medium shrink-0'
                               : 'text-emerald-700 dark:text-emerald-400 font-medium shrink-0'
                           }
                         >
-                          {isFundingPhase ? 'Funding Phase' : 'Active'}
+                          {effectiveAvailability}
                         </span>
                       </div>
                       <h3 className="text-base font-semibold text-stone-900 dark:text-stone-100 leading-snug">
                         {item.title}
                       </h3>
+                      {linkedProject && (
+                        <p className="text-[11px] text-[#B88B1E] dark:text-[#D4AF37] inline-flex items-center gap-1">
+                          <Link2 className="w-3 h-3" />
+                          Investment Project: {linkedProject.name} ({linkedProject.project_code})
+                        </p>
+                      )}
                       <p className="text-xs text-stone-600 dark:text-stone-300 line-clamp-3 leading-relaxed">
                         {item.description}
                       </p>
+
+                      {isDeactivated && (
+                        <p className="text-[11px] text-amber-700 dark:text-amber-400 leading-relaxed">
+                          Deactivated for new buyers — existing active orders & period end dates must still be fulfilled.
+                        </p>
+                      )}
 
                       <div className="flex items-center justify-between pt-1">
                         <UserAvatar universalId={item.owner_uid} showName showUid />
@@ -384,38 +378,6 @@ export const MarketplaceView: React.FC = () => {
                           </p>
                         </div>
                       </div>
-
-                      {/* Crowdfunding Progress */}
-                      {goal > 0 && (
-                        <div className="pt-2 border-t border-stone-100 dark:border-stone-800/80 space-y-1.5">
-                          <div className="flex justify-between text-xs">
-                            <span className="text-stone-500 dark:text-stone-400">Crowdfund Progress</span>
-                            <span className="font-mono-tabular text-stone-900 dark:text-stone-100">
-                              {totalInvested} / {goal} pts ({progressPct}%)
-                            </span>
-                          </div>
-                          <div className="w-full h-1.5 rounded-full bg-stone-200 dark:bg-stone-800 overflow-hidden">
-                            <div
-                              className="h-full bg-[#B88B1E] dark:bg-[#D4AF37]"
-                              style={{ width: `${progressPct}%` }}
-                            />
-                          </div>
-                          {(item.budget_doc_url || item.presentation_url) && (
-                            <div className="flex items-center gap-3 text-[11px] text-[#B88B1E] dark:text-[#D4AF37]">
-                              {item.budget_doc_url && (
-                                <a href={item.budget_doc_url} target="_blank" rel="noreferrer" className="hover:underline inline-flex items-center gap-1">
-                                  Budget <ExternalLink className="w-3 h-3" />
-                                </a>
-                              )}
-                              {item.presentation_url && (
-                                <a href={item.presentation_url} target="_blank" rel="noreferrer" className="hover:underline inline-flex items-center gap-1">
-                                  Deck <ExternalLink className="w-3 h-3" />
-                                </a>
-                              )}
-                            </div>
-                          )}
-                        </div>
-                      )}
                     </div>
                   </div>
 
@@ -454,51 +416,36 @@ export const MarketplaceView: React.FC = () => {
                     </div>
 
                     <div className="flex items-center gap-2 flex-wrap justify-end">
-                      {goal > 0 && (
+                      {(isOwn || isAdmin) && (
                         <button
                           type="button"
-                          onClick={() => {
-                            if (!isLiveFirestore) {
-                              setAuthModalOpen(true);
-                              pushToast('warning', 'Please sign in with a verified email account to invest.');
-                              return;
-                            }
-                            const remaining = Math.max(1, goal - totalInvested);
-                            setInvestAmount(Math.min(100, remaining));
-                            setInvestModalListing(item);
-                          }}
-                          className={`px-3 py-1.5 text-xs font-semibold rounded-lg inline-flex items-center gap-1 whitespace-nowrap ${
-                            isFundingPhase
-                              ? 'bg-[#B88B1E] dark:bg-[#D4AF37] text-white dark:text-stone-950 hover:opacity-90'
-                              : 'border border-stone-300 dark:border-stone-700 text-stone-800 dark:text-stone-200 hover:bg-stone-100 dark:hover:bg-stone-800'
-                          }`}
-                        >
-                          <TrendingUp className="w-3.5 h-3.5" />
-                          Invest
-                        </button>
-                      )}
-                      {isFundingPhase && (isOwn || isAdmin) && (
-                        <button
-                          type="button"
-                          disabled={activatingListingId === item.id}
+                          disabled={togglingDeactivateId === item.id}
                           onClick={async () => {
-                            setActivatingListingId(item.id);
+                            setTogglingDeactivateId(item.id);
                             try {
-                              await activateListingForOrders(item.id);
+                              await deactivateListing(item.id, !isDeactivated);
                             } finally {
-                              setActivatingListingId(null);
+                              setTogglingDeactivateId(null);
                             }
                           }}
-                          className="px-3 py-1.5 text-xs font-medium rounded-lg border border-emerald-600/40 text-emerald-700 dark:text-emerald-400 hover:bg-emerald-500/10 disabled:opacity-50 inline-flex items-center gap-1 whitespace-nowrap"
-                          title="Activate product/service for customer orders now"
+                          className={`px-3 py-1.5 text-xs font-medium rounded-lg border inline-flex items-center gap-1 whitespace-nowrap disabled:opacity-50 ${
+                            isDeactivated
+                              ? 'border-emerald-600/40 text-emerald-700 dark:text-emerald-400 hover:bg-emerald-500/10'
+                              : 'border-rose-600/40 text-rose-700 dark:text-rose-400 hover:bg-rose-500/10'
+                          }`}
+                          title="Deactivate or reactivate listing for new orders"
                         >
-                          <CheckCircle2 className="w-3.5 h-3.5" />
-                          {activatingListingId === item.id ? 'Activating...' : 'Activate Orders'}
+                          <Power className="w-3.5 h-3.5" />
+                          {togglingDeactivateId === item.id
+                            ? 'Updating...'
+                            : isDeactivated
+                              ? 'Reactivate'
+                              : 'Deactivate'}
                         </button>
                       )}
                       <button
                         type="button"
-                        disabled={isOwn || isFundingPhase}
+                        disabled={isOwn || isDeactivated}
                         onClick={() => {
                           if (!isLiveFirestore) {
                             setAuthModalOpen(true);
@@ -511,17 +458,17 @@ export const MarketplaceView: React.FC = () => {
                           setOrderModalListing(item);
                         }}
                         title={
-                          isFundingPhase
-                            ? 'Investment goal must be funded or activated before customer orders open'
+                          isDeactivated
+                            ? 'Listing is deactivated for new buyers'
                             : undefined
                         }
                         className={`px-3.5 py-1.5 text-xs font-semibold rounded-lg disabled:opacity-40 whitespace-nowrap ${
-                          isFundingPhase
+                          isDeactivated
                             ? 'border border-stone-300 dark:border-stone-700 text-stone-500 dark:text-stone-400'
                             : 'bg-[#B88B1E] dark:bg-[#D4AF37] text-white dark:text-stone-950 hover:opacity-90'
                         }`}
                       >
-                        {isOwn ? 'Your Listing' : isFundingPhase ? 'Funding First' : 'Order'}
+                        {isOwn ? 'Your Listing' : isDeactivated ? 'Deactivated' : 'Order'}
                       </button>
                     </div>
                   </div>
@@ -535,7 +482,7 @@ export const MarketplaceView: React.FC = () => {
       {subTab === 'orders' && (
         <div className="bg-white dark:bg-[#12151B] border border-stone-200 dark:border-stone-800 rounded-xl p-6 space-y-4">
           <h2 className="text-base font-semibold text-stone-900 dark:text-stone-100">
-            Orders & Delivery Settlement
+            Orders, C2P Payment Links & Delivery Settlement
           </h2>
           <div className="overflow-x-auto">
             <table className="w-full text-left text-xs">
@@ -543,6 +490,7 @@ export const MarketplaceView: React.FC = () => {
                 <tr className="border-b border-stone-200 dark:border-stone-800 text-stone-500 dark:text-stone-400">
                   <th className="py-2 pr-3 font-medium">Order #</th>
                   <th className="py-2 pr-3 font-medium">Listing</th>
+                  <th className="py-2 pr-3 font-medium">C2P Ref & Pay Link</th>
                   <th className="py-2 pr-3 font-medium">Buyer</th>
                   <th className="py-2 pr-3 font-medium">Seller</th>
                   <th className="py-2 pr-3 text-right font-medium">Total</th>
@@ -563,6 +511,37 @@ export const MarketplaceView: React.FC = () => {
                       </td>
                       <td className="py-3 pr-3 font-mono-tabular">
                         {ord.listing_code} × {ord.quantity} ({ord.payment_model})
+                      </td>
+                      <td className="py-3 pr-3">
+                        {ord.c2p_ref_code ? (
+                          <div className="space-y-0.5">
+                            <span className="block font-mono-tabular font-semibold text-stone-900 dark:text-stone-100">
+                              {ord.c2p_ref_code}
+                            </span>
+                            <div className="flex items-center gap-2">
+                              <button
+                                type="button"
+                                onClick={() => setActiveCheckoutRefCode(ord.c2p_ref_code!)}
+                                className="text-[11px] text-[#B88B1E] dark:text-[#D4AF37] hover:underline inline-flex items-center gap-1"
+                              >
+                                Open Pay Card
+                              </button>
+                              {ord.c2p_payment_link && (
+                                <a
+                                  href={ord.c2p_payment_link}
+                                  target="_blank"
+                                  rel="noopener noreferrer"
+                                  className="text-[11px] text-stone-500 hover:text-stone-900 dark:hover:text-stone-100 inline-flex items-center gap-0.5"
+                                  title={ord.c2p_payment_link}
+                                >
+                                  Link <ExternalLink className="w-3 h-3" />
+                                </a>
+                              )}
+                            </div>
+                          </div>
+                        ) : (
+                          <span className="text-stone-400">Direct Order</span>
+                        )}
                       </td>
                       <td className="py-3 pr-3">
                         <UserAvatar universalId={ord.buyer_uid} showUid />
@@ -611,46 +590,6 @@ export const MarketplaceView: React.FC = () => {
                     </tr>
                   );
                 })}
-              </tbody>
-            </table>
-          </div>
-        </div>
-      )}
-
-      {subTab === 'investments' && (
-        <div className="bg-white dark:bg-[#12151B] border border-stone-200 dark:border-stone-800 rounded-xl p-6 space-y-4">
-          <h2 className="text-base font-semibold text-stone-900 dark:text-stone-100">
-            Crowdfunding Investments & Dividends
-          </h2>
-          <div className="overflow-x-auto">
-            <table className="w-full text-left text-xs">
-              <thead>
-                <tr className="border-b border-stone-200 dark:border-stone-800 text-stone-500 dark:text-stone-400">
-                  <th className="py-2 pr-3 font-medium">Code</th>
-                  <th className="py-2 pr-3 font-medium">Investor</th>
-                  <th className="py-2 pr-3 font-medium">Listing</th>
-                  <th className="py-2 pr-3 text-right font-medium">Invested</th>
-                  <th className="py-2 pr-3 text-right font-medium">Share %</th>
-                  <th className="py-2 pr-3 text-right font-medium">Dividends Earned</th>
-                  <th className="py-2 text-right font-medium">Status</th>
-                </tr>
-              </thead>
-              <tbody className="divide-y divide-stone-100 dark:divide-stone-800/70">
-                {investments.map((inv) => (
-                  <tr key={inv.id}>
-                    <td className="py-3 pr-3 font-mono-tabular">{inv.investment_code}</td>
-                    <td className="py-3 pr-3">
-                      <UserAvatar universalId={inv.investor_uid} showUid />
-                    </td>
-                    <td className="py-3 pr-3 font-mono-tabular">{inv.listing_code}</td>
-                    <td className="py-3 pr-3 text-right font-mono-tabular">{inv.invested_points} pts</td>
-                    <td className="py-3 pr-3 text-right font-mono-tabular">{inv.share_percentage}%</td>
-                    <td className="py-3 pr-3 text-right font-mono-tabular font-semibold text-emerald-700 dark:text-emerald-400">
-                      +{inv.dividends_earned} pts
-                    </td>
-                    <td className="py-3 text-right">{inv.status}</td>
-                  </tr>
-                ))}
               </tbody>
             </table>
           </div>
@@ -798,9 +737,9 @@ export const MarketplaceView: React.FC = () => {
                   className="w-full px-3 py-2 text-sm rounded-lg border border-stone-300 dark:border-stone-700 bg-stone-50 dark:bg-[#0B0D10]"
                 />
               </div>
-              <div className="grid grid-cols-3 gap-3">
+              <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
                 <div>
-                  <label className="block font-medium text-stone-600 dark:text-stone-300 mb-1">Video URL</label>
+                  <label className="block font-medium text-stone-600 dark:text-stone-300 mb-1">Video URL (Optional)</label>
                   <input
                     type="url"
                     value={newVideoUrl}
@@ -809,46 +748,26 @@ export const MarketplaceView: React.FC = () => {
                   />
                 </div>
                 <div>
-                  <label className="block font-medium text-stone-600 dark:text-stone-300 mb-1">Invest Goal (pts)</label>
-                  <input
-                    type="number"
-                    min={0}
-                    value={newGoalPts}
-                    onChange={(e) => setNewGoalPts(Number(e.target.value))}
-                    className="w-full px-3 py-2 text-sm font-mono-tabular rounded-lg border border-stone-300 dark:border-stone-700 bg-stone-50 dark:bg-[#0B0D10]"
-                  />
-                </div>
-                <div>
-                  <label className="block font-medium text-stone-600 dark:text-stone-300 mb-1">Budget Doc URL</label>
-                  <input
-                    type="url"
-                    value={newBudgetUrl}
-                    onChange={(e) => setNewBudgetUrl(e.target.value)}
+                  <label className="block font-medium text-stone-600 dark:text-stone-300 mb-1">
+                    Link to Investment Project (Optional)
+                  </label>
+                  <select
+                    value={newLinkedProjectId}
+                    onChange={(e) => setNewLinkedProjectId(e.target.value)}
                     className="w-full px-3 py-2 text-sm rounded-lg border border-stone-300 dark:border-stone-700 bg-stone-50 dark:bg-[#0B0D10]"
-                  />
+                  >
+                    <option value="">No Linked Investment Project</option>
+                    {sortedLinkableProjects.map((prj) => (
+                      <option key={prj.id} value={prj.id}>
+                        {prj.project_code} — {prj.name}
+                      </option>
+                    ))}
+                  </select>
                 </div>
               </div>
-              <div>
-                <label className="block font-medium text-stone-600 dark:text-stone-300 mb-1">Presentation URL</label>
-                <input
-                  type="url"
-                  value={newDeckUrl}
-                  onChange={(e) => setNewDeckUrl(e.target.value)}
-                  className="w-full px-3 py-2 text-sm rounded-lg border border-stone-300 dark:border-stone-700 bg-stone-50 dark:bg-[#0B0D10]"
-                />
-              </div>
-              {newGoalPts > 0 && (
-                <label className="flex items-center gap-2 pt-1 text-stone-700 dark:text-stone-300 cursor-pointer">
-                  <input
-                    type="checkbox"
-                    checked={requireFundingFirst}
-                    onChange={(e) => setRequireFundingFirst(e.target.checked)}
-                  />
-                  <span>
-                    Start in Investment Phase (orders remain locked until goal is funded or owner activates)
-                  </span>
-                </label>
-              )}
+              <p className="text-[11px] text-stone-500 dark:text-stone-400">
+                Linking a project streams Delivered order income into that project&apos;s real-time investment revenue & shareholder dividends.
+              </p>
               <div className="flex justify-end gap-2 pt-2">
                 <button
                   type="button"
@@ -949,82 +868,6 @@ export const MarketplaceView: React.FC = () => {
           </div>
         </div>
       )}
-
-      {/* Invest Modal */}
-      {investModalListing && (() => {
-        const modalGoal = investModalListing.investment_goal_points || 0;
-        const modalFunded = investments
-          .filter((i) => i.listing_id === investModalListing.id && i.status === 'Active')
-          .reduce((acc, i) => acc + i.invested_points, 0);
-        const modalRemaining = Math.max(0, Number((modalGoal - modalFunded).toFixed(2)));
-        const myBalance = metricsMap[currentProfile.universal_id]?.balance ?? 0;
-
-        return (
-          <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/65 backdrop-blur-sm p-4">
-            <div className="bg-white dark:bg-[#12151B] border border-stone-200 dark:border-stone-800 rounded-xl max-w-md w-full p-6 space-y-4">
-              <div className="flex items-center justify-between border-b border-stone-200 dark:border-stone-800 pb-3">
-                <h3 className="font-cinzel text-lg font-bold text-stone-900 dark:text-stone-100">
-                  Invest in Listing
-                </h3>
-                <button
-                  type="button"
-                  onClick={() => setInvestModalListing(null)}
-                  className="p-1 text-stone-500 hover:text-stone-900 dark:hover:text-stone-100"
-                  aria-label="Close invest dialog"
-                >
-                  <X className="w-5 h-5" />
-                </button>
-              </div>
-              <div className="space-y-1.5 text-xs text-stone-600 dark:text-stone-300">
-                <p className="text-sm font-semibold text-stone-900 dark:text-stone-100">
-                  {investModalListing.title}
-                </p>
-                <p>
-                  Funded: <span className="font-mono-tabular font-semibold">{modalFunded} / {modalGoal} pts</span>
-                  {modalRemaining > 0
-                    ? ` · ${modalRemaining} pts remaining to activate customer orders`
-                    : ' · Goal met (orders active)'}
-                </p>
-                <p className="text-stone-500 dark:text-stone-400">
-                  Your Balance: <span className="font-mono-tabular font-medium">{myBalance} pts</span> (Floor {systemConfig.negative_points_floor} pts). Dividends settle on delivery.
-                </p>
-              </div>
-              <form onSubmit={handleInvestSubmit} className="space-y-4 text-xs">
-                <div>
-                  <div className="flex items-center justify-between mb-1">
-                    <label className="block font-medium">Investment Amount (pts)</label>
-                    {modalRemaining > 0 && (
-                      <button
-                        type="button"
-                        onClick={() => setInvestAmount(modalRemaining)}
-                        className="text-[11px] font-medium text-[#B88B1E] dark:text-[#D4AF37] hover:underline"
-                      >
-                        Fund Remaining ({modalRemaining} pts)
-                      </button>
-                    )}
-                  </div>
-                  <input
-                    type="number"
-                    min={1}
-                    step="any"
-                    required
-                    value={investAmount || ''}
-                    onChange={(e) => setInvestAmount(e.target.value === '' ? 0 : Number(e.target.value))}
-                    className="w-full px-3 py-2 text-sm font-mono-tabular rounded-lg border border-stone-300 dark:border-stone-700 bg-stone-50 dark:bg-[#0B0D10]"
-                  />
-                </div>
-                <button
-                  type="submit"
-                  disabled={submittingInvest || !investAmount || investAmount <= 0}
-                  className="w-full py-2.5 text-sm font-semibold rounded-lg bg-[#B88B1E] dark:bg-[#D4AF37] text-white dark:text-stone-950 hover:opacity-90 disabled:opacity-50"
-                >
-                  {submittingInvest ? 'Committing Investment...' : 'Commit Investment Points'}
-                </button>
-              </form>
-            </div>
-          </div>
-        );
-      })()}
 
       {/* Buyer Delivery Confirmation Modal */}
       {deliveryModalOrder && (

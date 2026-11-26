@@ -167,7 +167,8 @@ service cloud.firestore {
           'target_uid', 'recognizer_uid', 'recognizer_auth_uid', 'direction', 'comment', 'createdAt', 'updatedAt'
         ]) &&
         data.keys().hasOnly([
-          'target_uid', 'recognizer_uid', 'recognizer_auth_uid', 'direction', 'comment', 'createdAt', 'updatedAt'
+          'target_uid', 'recognizer_uid', 'recognizer_auth_uid', 'direction', 'comment',
+          'reply', 'replied_at', 'createdAt', 'updatedAt'
         ]) &&
         isNonEmptyStr(data.target_uid, 32) &&
         isNonEmptyStr(data.recognizer_uid, 32) &&
@@ -175,6 +176,8 @@ service cloud.firestore {
         isValidId(data.recognizer_auth_uid) &&
         data.direction in ['UPWARD', 'COMPENSATE'] &&
         isNonEmptyStr(data.comment, 500) &&
+        (!('reply' in data) || isOptStr(data.reply, 500)) &&
+        (!('replied_at' in data) || isOptStr(data.replied_at, 64)) &&
         data.createdAt is timestamp &&
         data.updatedAt is timestamp;
     }
@@ -189,7 +192,8 @@ service cloud.firestore {
           'category', 'description', 'delivery_method', 'location', 'google_map_link',
           'contact_info', 'image_urls', 'video_url', 'evidence_link', 'price_points',
           'payment_model', 'end_date', 'investment_goal_points', 'budget_doc_url',
-          'presentation_url', 'entity_type', 'availability_status', 'obligation_status', 'createdAt', 'updatedAt'
+          'presentation_url', 'linked_project_id', 'entity_type', 'availability_status',
+          'is_deactivated', 'obligation_status', 'createdAt', 'updatedAt'
         ]) &&
         isNonEmptyStr(data.listing_code, 40) &&
         isNonEmptyStr(data.owner_uid, 32) &&
@@ -211,8 +215,10 @@ service cloud.firestore {
         (!('investment_goal_points' in data) || (data.investment_goal_points is number && data.investment_goal_points >= 0)) &&
         (!('budget_doc_url' in data) || isOptStr(data.budget_doc_url, 512)) &&
         (!('presentation_url' in data) || isOptStr(data.presentation_url, 512)) &&
+        (!('linked_project_id' in data) || isOptStr(data.linked_project_id, 128)) &&
         (!('entity_type' in data) || isOptStr(data.entity_type, 64)) &&
-        (!('availability_status' in data) || data.availability_status in ['Funding', 'Active']) &&
+        (!('availability_status' in data) || data.availability_status in ['Funding', 'Active', 'Deactivated']) &&
+        (!('is_deactivated' in data) || data.is_deactivated is bool) &&
         data.obligation_status in ['None', 'HasObligations'] &&
         data.createdAt is timestamp &&
         data.updatedAt is timestamp;
@@ -227,6 +233,7 @@ service cloud.firestore {
           'project_code', 'owner_uid', 'owner_auth_uid', 'elected_ceo_uid', 'name',
           'category', 'description', 'visibility', 'location', 'google_map_link',
           'contact_info', 'image_urls', 'video_url', 'evidence_link', 'entity_type',
+          'investment_goal_points', 'budget_doc_url', 'presentation_url', 'investment_status',
           'delegates', 'members', 'join_requests', 'obligation_status', 'createdAt', 'updatedAt'
         ]) &&
         isNonEmptyStr(data.project_code, 40) &&
@@ -244,12 +251,42 @@ service cloud.firestore {
         (!('video_url' in data) || isOptStr(data.video_url, 512)) &&
         (!('evidence_link' in data) || isOptStr(data.evidence_link, 512)) &&
         (!('entity_type' in data) || isOptStr(data.entity_type, 64)) &&
+        (!('investment_goal_points' in data) || (data.investment_goal_points is number && data.investment_goal_points >= 0)) &&
+        (!('budget_doc_url' in data) || isOptStr(data.budget_doc_url, 512)) &&
+        (!('presentation_url' in data) || isOptStr(data.presentation_url, 512)) &&
+        (!('investment_status' in data) || data.investment_status in ['Open', 'Deactivated', 'Closed']) &&
         (!('delegates' in data) || (data.delegates is list && data.delegates.size() <= 50)) &&
         (!('members' in data) || (data.members is list && data.members.size() <= 100)) &&
         (!('join_requests' in data) || (data.join_requests is list && data.join_requests.size() <= 100)) &&
         data.obligation_status in ['None', 'HasObligations'] &&
         data.createdAt is timestamp &&
         data.updatedAt is timestamp;
+    }
+
+    function isValidProjectInvestmentReport(data) {
+      return data.keys().hasAll([
+          'report_code', 'project_id', 'project_code', 'author_uid', 'author_auth_uid',
+          'title', 'summary_text', 'links', 'period_cost_points', 'period_income_points',
+          'total_accumulated_cost', 'total_accumulated_income', 'createdAt'
+        ]) &&
+        data.keys().hasOnly([
+          'report_code', 'project_id', 'project_code', 'author_uid', 'author_auth_uid',
+          'title', 'summary_text', 'links', 'period_cost_points', 'period_income_points',
+          'total_accumulated_cost', 'total_accumulated_income', 'createdAt'
+        ]) &&
+        isNonEmptyStr(data.report_code, 40) &&
+        isValidId(data.project_id) &&
+        isNonEmptyStr(data.project_code, 40) &&
+        isNonEmptyStr(data.author_uid, 32) &&
+        isValidId(data.author_auth_uid) &&
+        isNonEmptyStr(data.title, 160) &&
+        isNonEmptyStr(data.summary_text, 2000) &&
+        data.links is list && data.links.size() <= 20 && (data.links.size() == 0 || data.links[0] is map) &&
+        data.period_cost_points is number && data.period_cost_points >= 0 &&
+        data.period_income_points is number && data.period_income_points >= 0 &&
+        data.total_accumulated_cost is number && data.total_accumulated_cost >= 0 &&
+        data.total_accumulated_income is number && data.total_accumulated_income >= 0 &&
+        data.createdAt is timestamp;
     }
 
     function isValidHierarchyItem(data) {
@@ -327,7 +364,8 @@ service cloud.firestore {
           'seller_uid', 'seller_auth_uid', 'listing_id', 'listing_code', 'listing_type',
           'quantity', 'total_points', 'payment_model', 'end_date', 'google_map_link',
           'notes', 'order_status', 'delivery_status', 'rejection_reason',
-          'trigger_type', 'trigger_payload', 'obligation_status', 'createdAt', 'updatedAt'
+          'c2p_ref_code', 'c2p_payment_link', 'trigger_type', 'trigger_payload',
+          'obligation_status', 'createdAt', 'updatedAt'
         ]) &&
         isNonEmptyStr(data.order_number, 40) &&
         isNonEmptyStr(data.order_date, 32) &&
@@ -348,6 +386,8 @@ service cloud.firestore {
         data.order_status in ['Pending', 'Confirmed', 'Completed', 'Rejected'] &&
         data.delivery_status in ['Awaiting', 'Delivered', 'Partially Delivered', 'Rejected'] &&
         (!('rejection_reason' in data) || isOptStr(data.rejection_reason, 500)) &&
+        (!('c2p_ref_code' in data) || isOptStr(data.c2p_ref_code, 64)) &&
+        (!('c2p_payment_link' in data) || isOptStr(data.c2p_payment_link, 512)) &&
         (!('trigger_type' in data) || isOptStr(data.trigger_type, 64)) &&
         (!('trigger_payload' in data) || isOptStr(data.trigger_payload, 512)) &&
         data.obligation_status in ['None', 'HasObligations'] &&
@@ -386,14 +426,16 @@ service cloud.firestore {
           'dividends_earned', 'status', 'obligation_status', 'createdAt', 'updatedAt'
         ]) &&
         data.keys().hasOnly([
-          'investment_code', 'investor_uid', 'investor_auth_uid', 'listing_id',
-          'listing_code', 'target_type', 'invested_points', 'share_percentage',
+          'investment_code', 'investor_uid', 'investor_auth_uid', 'project_id', 'project_code',
+          'listing_id', 'listing_code', 'target_type', 'invested_points', 'share_percentage',
           'budget_doc_link', 'presentation_link', 'dividends_earned', 'status',
           'obligation_status', 'createdAt', 'updatedAt'
         ]) &&
         isNonEmptyStr(data.investment_code, 40) &&
         isNonEmptyStr(data.investor_uid, 32) &&
         isValidId(data.investor_auth_uid) &&
+        (!('project_id' in data) || isOptStr(data.project_id, 128)) &&
+        (!('project_code' in data) || isOptStr(data.project_code, 40)) &&
         isValidId(data.listing_id) &&
         isNonEmptyStr(data.listing_code, 40) &&
         isNonEmptyStr(data.target_type, 48) &&
@@ -415,8 +457,8 @@ service cloud.firestore {
         ]) &&
         data.keys().hasOnly([
           'exchange_code', 'buyer_uid', 'buyer_auth_uid', 'seller_uid', 'seller_auth_uid',
-          'points_requested', 'cash_amount', 'currency', 'status', 'payment_proof',
-          'notes', 'obligation_status', 'createdAt', 'updatedAt'
+          'points_requested', 'cash_amount', 'currency', 'status', 'is_deactivated',
+          'payment_proof', 'notes', 'obligation_status', 'createdAt', 'updatedAt'
         ]) &&
         isNonEmptyStr(data.exchange_code, 40) &&
         (!('buyer_uid' in data) || isOptStr(data.buyer_uid, 32)) &&
@@ -426,7 +468,8 @@ service cloud.firestore {
         data.points_requested is number && data.points_requested > 0 &&
         data.cash_amount is number && data.cash_amount > 0 &&
         isNonEmptyStr(data.currency, 12) &&
-        data.status in ['Open', 'Escrow Locked', 'Proof Submitted', 'Released', 'Cancelled'] &&
+        data.status in ['Open', 'Escrow Locked', 'Proof Submitted', 'Released', 'Deactivated', 'Cancelled'] &&
+        (!('is_deactivated' in data) || data.is_deactivated is bool) &&
         (!('payment_proof' in data) || isOptStr(data.payment_proof, 512)) &&
         (!('notes' in data) || isOptStr(data.notes, 500)) &&
         data.obligation_status in ['None', 'HasObligations'] &&
@@ -441,9 +484,11 @@ service cloud.firestore {
         ]) &&
         data.keys().hasOnly([
           'ref_code', 'ref_type', 'issuer_uid', 'issuer_auth_uid', 'counterparty_uid',
-          'counterparty_auth_uid', 'linked_listing_code', 'widget_name', 'points_amount',
-          'payment_model', 'end_date', 'description', 'trigger_type', 'trigger_payload',
-          'status', 'payer_email', 'confirmed_at', 'obligation_status', 'createdAt', 'updatedAt'
+          'counterparty_auth_uid', 'participant_auth_uids', 'linked_listing_code',
+          'linked_order_id', 'widget_name', 'points_amount', 'payment_model', 'end_date',
+          'description', 'trigger_type', 'trigger_payload', 'status', 'is_deactivated',
+          'payments_count', 'last_paid_by_uid', 'c2p_settlements', 'payer_email',
+          'confirmed_at', 'obligation_status', 'createdAt', 'updatedAt'
         ]) &&
         isNonEmptyStr(data.ref_code, 64) &&
         data.ref_type in ['P2P', 'C2P'] &&
@@ -451,7 +496,9 @@ service cloud.firestore {
         isValidId(data.issuer_auth_uid) &&
         (!('counterparty_uid' in data) || isOptStr(data.counterparty_uid, 32)) &&
         (!('counterparty_auth_uid' in data) || isOptStr(data.counterparty_auth_uid, 128)) &&
+        (!('participant_auth_uids' in data) || (data.participant_auth_uids is list && data.participant_auth_uids.size() <= 500 && (data.participant_auth_uids.size() == 0 || data.participant_auth_uids[0] is string))) &&
         (!('linked_listing_code' in data) || isOptStr(data.linked_listing_code, 40)) &&
+        (!('linked_order_id' in data) || isOptStr(data.linked_order_id, 128)) &&
         (!('widget_name' in data) || isOptStr(data.widget_name, 120)) &&
         data.points_amount is number && data.points_amount > 0 &&
         data.payment_model in ['One-Time', 'Monthly Installment', 'Monthly Subscription'] &&
@@ -459,7 +506,11 @@ service cloud.firestore {
         (!('description' in data) || isOptStr(data.description, 500)) &&
         data.trigger_type in ['None', 'Redirect URL', 'Webhook/Notification', 'Access Grant', 'Order Creation', 'Manual Verification Request'] &&
         (!('trigger_payload' in data) || isOptStr(data.trigger_payload, 512)) &&
-        data.status in ['Pending', 'Confirmed', 'Cancelled'] &&
+        data.status in ['Open', 'Pending', 'Confirmed', 'Deactivated', 'Cancelled'] &&
+        (!('is_deactivated' in data) || data.is_deactivated is bool) &&
+        (!('payments_count' in data) || (data.payments_count is int && data.payments_count >= 0)) &&
+        (!('last_paid_by_uid' in data) || isOptStr(data.last_paid_by_uid, 32)) &&
+        (!('c2p_settlements' in data) || (data.c2p_settlements is list && data.c2p_settlements.size() <= 500 && (data.c2p_settlements.size() == 0 || data.c2p_settlements[0] is map))) &&
         (!('payer_email' in data) || isOptStr(data.payer_email, 180)) &&
         (!('confirmed_at' in data) || isOptStr(data.confirmed_at, 64)) &&
         data.obligation_status in ['None', 'HasObligations'] &&
@@ -523,15 +574,21 @@ service cloud.firestore {
           'target_id', 'reason', 'status', 'createdAt', 'updatedAt'
         ]) &&
         data.keys().hasOnly([
-          'report_code', 'reporter_auth_uid', 'reporter_email', 'target_type',
-          'target_id', 'reason', 'status', 'createdAt', 'updatedAt'
+          'report_code', 'reporter_uid', 'reporter_auth_uid', 'reporter_email', 'reported_uid',
+          'target_type', 'target_id', 'target_snapshot', 'reason',
+          'admin_comment', 'admin_action_taken', 'status', 'createdAt', 'updatedAt'
         ]) &&
         isNonEmptyStr(data.report_code, 40) &&
+        (!('reporter_uid' in data) || isOptStr(data.reporter_uid, 32)) &&
         isValidId(data.reporter_auth_uid) &&
         isNonEmptyStr(data.reporter_email, 180) &&
-        data.target_type in ['User', 'Profile Image', 'Service Log', 'Listing', 'Order'] &&
+        (!('reported_uid' in data) || isOptStr(data.reported_uid, 32)) &&
+        data.target_type in ['User', 'Profile Image', 'Service Log', 'Listing', 'Order', 'Recognition Fraud'] &&
         isNonEmptyStr(data.target_id, 128) &&
+        (!('target_snapshot' in data) || isOptStr(data.target_snapshot, 1600)) &&
         isNonEmptyStr(data.reason, 1000) &&
+        (!('admin_comment' in data) || isOptStr(data.admin_comment, 1000)) &&
+        (!('admin_action_taken' in data) || isOptStr(data.admin_action_taken, 200)) &&
         data.status in ['Open', 'Reviewed', 'Actioned', 'Dismissed'] &&
         data.createdAt is timestamp &&
         data.updatedAt is timestamp;
@@ -697,8 +754,13 @@ service cloud.firestore {
         incoming().recognizer_auth_uid == existing().recognizer_auth_uid &&
         incoming().target_uid == existing().target_uid &&
         incoming().createdAt == existing().createdAt &&
-        incoming().updatedAt == request.time &&
-        (isAdmin() || (existing().recognizer_auth_uid == request.auth.uid && incoming().diff(existing()).affectedKeys().hasOnly(['direction', 'comment', 'updatedAt'])));
+        incoming().updatedAt == request.time && (
+          isAdmin() ||
+          (existing().recognizer_auth_uid == request.auth.uid && incoming().diff(existing()).affectedKeys().hasOnly(['direction', 'comment', 'updatedAt'])) ||
+          (exists(/databases/$(database)/documents/profiles/$(request.auth.uid)) &&
+            get(/databases/$(database)/documents/profiles/$(request.auth.uid)).data.universal_id == existing().target_uid &&
+            incoming().diff(existing()).affectedKeys().hasOnly(['reply', 'replied_at', 'updatedAt']))
+        );
       allow delete: if isVerifiedSignedIn() && isValidId(voteId) && (existing().recognizer_auth_uid == request.auth.uid || isAdmin());
     }
 
@@ -716,12 +778,12 @@ service cloud.firestore {
         incoming().createdAt == existing().createdAt &&
         incoming().updatedAt == request.time && (
           isAdmin() ||
-          (existing().owner_auth_uid == request.auth.uid && incoming().diff(existing()).affectedKeys().hasOnly(['availability_status', 'updatedAt'])) ||
+          (existing().owner_auth_uid == request.auth.uid && incoming().diff(existing()).affectedKeys().hasOnly(['availability_status', 'is_deactivated', 'updatedAt'])) ||
           (existing().owner_auth_uid == request.auth.uid && existing().obligation_status == 'None' && incoming().diff(existing()).affectedKeys().hasOnly([
             'title', 'category', 'description', 'delivery_method', 'location', 'google_map_link',
             'contact_info', 'image_urls', 'video_url', 'evidence_link', 'price_points',
             'payment_model', 'end_date', 'investment_goal_points', 'budget_doc_url', 'presentation_url',
-            'availability_status', 'updatedAt'
+            'linked_project_id', 'availability_status', 'is_deactivated', 'updatedAt'
           ])) ||
           (incoming().diff(existing()).affectedKeys().hasOnly(['obligation_status', 'updatedAt']) && incoming().obligation_status == 'HasObligations') ||
           (incoming().diff(existing()).affectedKeys().hasOnly(['obligation_status', 'availability_status', 'updatedAt']) && incoming().obligation_status == 'HasObligations' && incoming().availability_status == 'Active')
@@ -745,11 +807,28 @@ service cloud.firestore {
           (existing().owner_auth_uid == request.auth.uid && incoming().diff(existing()).affectedKeys().hasOnly([
             'name', 'category', 'description', 'visibility', 'location', 'google_map_link',
             'contact_info', 'image_urls', 'video_url', 'evidence_link', 'delegates',
-            'members', 'join_requests', 'elected_ceo_uid', 'obligation_status', 'updatedAt'
+            'members', 'join_requests', 'elected_ceo_uid', 'investment_goal_points',
+            'budget_doc_url', 'presentation_url', 'investment_status', 'obligation_status', 'updatedAt'
           ])) ||
+          (exists(/databases/$(database)/documents/profiles/$(request.auth.uid)) &&
+            get(/databases/$(database)/documents/profiles/$(request.auth.uid)).data.universal_id == existing().elected_ceo_uid &&
+            incoming().diff(existing()).affectedKeys().hasOnly([
+              'investment_goal_points', 'budget_doc_url', 'presentation_url', 'investment_status', 'updatedAt'
+            ])) ||
+          (incoming().diff(existing()).affectedKeys().hasOnly(['obligation_status', 'updatedAt']) && incoming().obligation_status == 'HasObligations') ||
           (incoming().diff(existing()).affectedKeys().hasOnly(['join_requests', 'members', 'updatedAt']))
         );
       allow delete: if isVerifiedSignedIn() && isValidId(projectId) && ((existing().owner_auth_uid == request.auth.uid && existing().obligation_status == 'None') || isAdmin());
+    }
+
+    match /project_investment_reports/{reportId} {
+      allow get: if isVerifiedSignedIn() && isValidId(reportId);
+      allow list: if isVerifiedSignedIn() && resource.data.period_cost_points >= 0;
+      allow create: if isVerifiedSignedIn() && isValidId(reportId) && isValidProjectInvestmentReport(incoming()) &&
+        incoming().author_auth_uid == request.auth.uid &&
+        (incoming().project_id == 'prj_1' || exists(/databases/$(database)/documents/projects/$(incoming().project_id))) &&
+        incoming().createdAt == request.time;
+      allow update, delete: if isAdmin() && isValidId(reportId);
     }
 
     match /project_hierarchy_items/{itemId} {
@@ -835,7 +914,9 @@ service cloud.firestore {
       allow list: if isVerifiedSignedIn() && resource.data.invested_points > 0;
       allow create: if isVerifiedSignedIn() && isValidId(investmentId) && isValidInvestment(incoming()) &&
         incoming().investor_auth_uid == request.auth.uid &&
-        (incoming().listing_id in ['lst_1', 'lst_2', 'lst_3'] || exists(/databases/$(database)/documents/listings/$(incoming().listing_id))) &&
+        (incoming().listing_id in ['lst_1', 'lst_2', 'lst_3', 'prj_1'] ||
+          exists(/databases/$(database)/documents/listings/$(incoming().listing_id)) ||
+          exists(/databases/$(database)/documents/projects/$(incoming().listing_id))) &&
         incoming().createdAt == request.time &&
         incoming().updatedAt == request.time;
       allow update: if isVerifiedSignedIn() && isValidId(investmentId) && isValidInvestment(incoming()) &&
@@ -861,8 +942,8 @@ service cloud.firestore {
         incoming().createdAt == existing().createdAt &&
         incoming().updatedAt == request.time && (
           isAdmin() ||
-          (!(existing().status in ['Released', 'Cancelled']) && (
-            (existing().seller_auth_uid == request.auth.uid && incoming().diff(existing()).affectedKeys().hasOnly(['status', 'obligation_status', 'updatedAt'])) ||
+          (!(existing().status in ['Released', 'Deactivated', 'Cancelled']) && (
+            (existing().seller_auth_uid == request.auth.uid && incoming().diff(existing()).affectedKeys().hasOnly(['status', 'is_deactivated', 'obligation_status', 'updatedAt'])) ||
             (incoming().diff(existing()).affectedKeys().hasOnly(['buyer_uid', 'buyer_auth_uid', 'payment_proof', 'status', 'obligation_status', 'updatedAt']))
           ))
         );
@@ -871,10 +952,16 @@ service cloud.firestore {
 
     match /transaction_refs/{refId} {
       allow get: if isVerifiedSignedIn() && isValidId(refId);
-      allow list: if isVerifiedSignedIn() && (resource.data.issuer_auth_uid == request.auth.uid || resource.data.counterparty_auth_uid == request.auth.uid || isAdmin());
+      allow list: if isVerifiedSignedIn() && (
+        resource.data.status == 'Open' ||
+        resource.data.issuer_auth_uid == request.auth.uid ||
+        resource.data.counterparty_auth_uid == request.auth.uid ||
+        ('participant_auth_uids' in resource.data && request.auth.uid in resource.data.participant_auth_uids) ||
+        isAdmin()
+      );
       allow create: if isVerifiedSignedIn() && isValidId(refId) && isValidTransactionRef(incoming()) &&
         incoming().issuer_auth_uid == request.auth.uid &&
-        incoming().status == 'Pending' &&
+        ((incoming().ref_type == 'C2P' && incoming().status == 'Open') || (incoming().ref_type == 'P2P' && incoming().status == 'Pending')) &&
         incoming().createdAt == request.time &&
         incoming().updatedAt == request.time;
       allow update: if isVerifiedSignedIn() && isValidId(refId) && isValidTransactionRef(incoming()) &&
@@ -882,9 +969,15 @@ service cloud.firestore {
         incoming().createdAt == existing().createdAt &&
         incoming().updatedAt == request.time && (
           isAdmin() ||
-          (existing().status == 'Pending' && (
-            (existing().issuer_auth_uid == request.auth.uid && incoming().diff(existing()).affectedKeys().hasOnly(['status', 'description', 'trigger_type', 'trigger_payload', 'updatedAt'])) ||
-            (existing().issuer_auth_uid != request.auth.uid && incoming().diff(existing()).affectedKeys().hasOnly(['counterparty_uid', 'counterparty_auth_uid', 'payer_email', 'status', 'confirmed_at', 'obligation_status', 'updatedAt']))
+          (existing().status in ['Open', 'Pending'] && (
+            (existing().issuer_auth_uid == request.auth.uid && incoming().diff(existing()).affectedKeys().hasOnly(['status', 'is_deactivated', 'description', 'trigger_type', 'trigger_payload', 'updatedAt'])) ||
+            (existing().issuer_auth_uid != request.auth.uid &&
+              (existing().ref_type == 'P2P' || incoming().status == 'Open') &&
+              incoming().diff(existing()).affectedKeys().hasOnly([
+                'counterparty_uid', 'counterparty_auth_uid', 'participant_auth_uids', 'linked_order_id',
+                'payer_email', 'status', 'payments_count', 'last_paid_by_uid', 'c2p_settlements',
+                'confirmed_at', 'obligation_status', 'updatedAt'
+              ]))
           ))
         );
       allow delete: if isVerifiedSignedIn() && isValidId(refId) && ((existing().issuer_auth_uid == request.auth.uid && existing().obligation_status == 'None') || isAdmin());

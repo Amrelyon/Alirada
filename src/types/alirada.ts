@@ -98,6 +98,8 @@ export interface RecognitionVote {
   recognizer_auth_uid: string;
   direction: 'UPWARD' | 'COMPENSATE';
   comment: string;
+  reply?: string;
+  replied_at?: string;
   created_at: string;
 }
 
@@ -120,11 +122,13 @@ export interface Listing {
   price_points: number;
   payment_model: PaymentModel;
   end_date?: string;
+  linked_project_id?: string;
   investment_goal_points?: number;
   budget_doc_url?: string;
   presentation_url?: string;
   entity_type?: EntityType;
-  availability_status?: 'Funding' | 'Active';
+  availability_status?: 'Funding' | 'Active' | 'Deactivated';
+  is_deactivated?: boolean;
   obligation_status: ObligationStatus;
   created_at: string;
 }
@@ -146,10 +150,36 @@ export interface Project {
   video_url?: string;
   evidence_link?: string;
   entity_type?: EntityType;
+  investment_goal_points?: number;
+  budget_doc_url?: string;
+  presentation_url?: string;
+  investment_status?: 'Open' | 'Deactivated' | 'Closed';
   delegates: { uid: string; email: string; role: string }[];
   members: string[];
   join_requests: string[];
   obligation_status: ObligationStatus;
+  created_at: string;
+}
+
+export interface ProjectInvestmentReportLink {
+  label: string;
+  url: string;
+}
+
+export interface ProjectInvestmentReport {
+  id: string;
+  report_code: string;
+  project_id: string;
+  project_code: string;
+  author_uid: string;
+  author_auth_uid: string;
+  title: string;
+  summary_text: string;
+  links: ProjectInvestmentReportLink[];
+  period_cost_points: number;
+  period_income_points: number;
+  total_accumulated_cost: number;
+  total_accumulated_income: number;
   created_at: string;
 }
 
@@ -240,6 +270,8 @@ export interface Order {
   order_status: 'Pending' | 'Confirmed' | 'Completed' | 'Rejected';
   delivery_status: 'Awaiting' | 'Delivered' | 'Partially Delivered' | 'Rejected';
   rejection_reason?: string;
+  c2p_ref_code?: string;
+  c2p_payment_link?: string;
   trigger_type?: string;
   trigger_payload?: string;
   obligation_status: ObligationStatus;
@@ -267,6 +299,8 @@ export interface Investment {
   investment_code: string;
   investor_uid: string;
   investor_auth_uid: string;
+  project_id?: string;
+  project_code?: string;
   listing_id: string;
   listing_code: string;
   target_type: string;
@@ -290,7 +324,8 @@ export interface PointExchange {
   points_requested: number;
   cash_amount: number;
   currency: string;
-  status: 'Open' | 'Escrow Locked' | 'Proof Submitted' | 'Released' | 'Cancelled';
+  status: 'Open' | 'Escrow Locked' | 'Proof Submitted' | 'Released' | 'Deactivated' | 'Cancelled';
+  is_deactivated?: boolean;
   payment_proof?: string;
   notes?: string;
   obligation_status: ObligationStatus;
@@ -305,6 +340,16 @@ export type TriggerType =
   | 'Order Creation'
   | 'Manual Verification Request';
 
+export interface C2PSettlementRecord {
+  payer_uid: string;
+  payer_auth_uid: string;
+  payer_email?: string;
+  points_amount: number;
+  order_id?: string;
+  order_number?: string;
+  paid_at: string;
+}
+
 export interface TransactionRef {
   id: string;
   ref_code: string;
@@ -313,7 +358,9 @@ export interface TransactionRef {
   issuer_auth_uid: string;
   counterparty_uid?: string;
   counterparty_auth_uid?: string;
+  participant_auth_uids?: string[];
   linked_listing_code?: string;
+  linked_order_id?: string;
   widget_name?: string;
   points_amount: number;
   payment_model: PaymentModel;
@@ -321,7 +368,11 @@ export interface TransactionRef {
   description?: string;
   trigger_type: TriggerType;
   trigger_payload?: string;
-  status: 'Pending' | 'Confirmed' | 'Cancelled';
+  status: 'Open' | 'Pending' | 'Confirmed' | 'Deactivated' | 'Cancelled';
+  is_deactivated?: boolean;
+  payments_count?: number;
+  last_paid_by_uid?: string;
+  c2p_settlements?: C2PSettlementRecord[];
   payer_email?: string;
   confirmed_at?: string;
   obligation_status: ObligationStatus;
@@ -369,11 +420,16 @@ export interface GovernanceDelegate {
 export interface UserReport {
   id: string;
   report_code: string;
+  reporter_uid?: string;
   reporter_auth_uid: string;
   reporter_email: string;
-  target_type: 'User' | 'Profile Image' | 'Service Log' | 'Listing' | 'Order';
+  reported_uid?: string;
+  target_type: 'User' | 'Profile Image' | 'Service Log' | 'Listing' | 'Order' | 'Recognition Fraud';
   target_id: string;
+  target_snapshot?: string;
   reason: string;
+  admin_comment?: string;
+  admin_action_taken?: string;
   status: 'Open' | 'Reviewed' | 'Actioned' | 'Dismissed';
   created_at: string;
 }

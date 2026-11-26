@@ -41,6 +41,7 @@ import {
   SEED_POINT_EXCHANGES,
   SEED_PROFILES,
   SEED_PROJECTS,
+  SEED_PROJECT_REPORTS,
   SEED_RECOGNITION_VOTES,
   SEED_SERVICE_LOGS,
   SEED_TRANSACTION_REFS,
@@ -50,6 +51,7 @@ import {
   AliradaProfile,
   BatchPayment,
   BatchRecipient,
+  C2PSettlementRecord,
   Delivery,
   EmploymentPosting,
   EntityType,
@@ -64,6 +66,8 @@ import {
   PointExchange,
   Project,
   ProjectHierarchyItem,
+  ProjectInvestmentReport,
+  ProjectInvestmentReportLink,
   RecognitionVote,
   RequestedServantLog,
   ServiceLog,
@@ -94,16 +98,12 @@ interface ToastMessage {
 
 export function getEffectiveListingAvailability(
   listing: Listing,
-  investments: Investment[]
-): 'Funding' | 'Active' {
-  if (listing.availability_status === 'Active') return 'Active';
-  const goal = listing.investment_goal_points || 0;
-  if (goal <= 0) return 'Active';
-  const totalInvested = investments
-    .filter((i) => i.listing_id === listing.id && i.status === 'Active')
-    .reduce((acc, i) => acc + i.invested_points, 0);
-  if (totalInvested >= goal) return 'Active';
-  return 'Funding';
+  _investments?: Investment[]
+): 'Active' | 'Deactivated' {
+  if (listing.is_deactivated || listing.availability_status === 'Deactivated') {
+    return 'Deactivated';
+  }
+  return 'Active';
 }
 
 interface AliradaContextValue {
@@ -130,6 +130,7 @@ interface AliradaContextValue {
   orders: Order[];
   deliveries: Delivery[];
   investments: Investment[];
+  projectReports: ProjectInvestmentReport[];
   pointExchanges: PointExchange[];
   transactionRefs: TransactionRef[];
   batchPayments: BatchPayment[];
@@ -147,6 +148,8 @@ interface AliradaContextValue {
   setAuthModalOpen: (open: boolean) => void;
   reportModalTarget: { type: UserReport['target_type']; id: string } | null;
   setReportModalTarget: (t: { type: UserReport['target_type']; id: string } | null) => void;
+  activeCheckoutRefCode: string | null;
+  setActiveCheckoutRefCode: (code: string | null) => void;
   toasts: ToastMessage[];
   pushToast: (kind: ToastMessage['kind'], text: string) => void;
   dismissToast: (id: string) => void;
@@ -200,9 +203,11 @@ interface AliradaContextValue {
     direction: 'UPWARD' | 'COMPENSATE',
     comment: string
   ) => Promise<boolean>;
-  // Marketplace & Crowdfunding
+  replyToRecognition: (voteId: string, replyText: string) => Promise<boolean>;
+  // Marketplace & Project Investments
   createListing: (payload: Omit<Listing, 'id' | 'listing_code' | 'owner_uid' | 'owner_auth_uid' | 'obligation_status' | 'created_at'>) => Promise<boolean>;
   updateListing: (id: string, patch: Partial<Listing>) => Promise<boolean>;
+  deactivateListing: (listingId: string, deactivated: boolean) => Promise<boolean>;
   deleteListing: (id: string) => Promise<boolean>;
   activateListingForOrders: (listingId: string) => Promise<boolean>;
   placeOrder: (payload: {
@@ -210,7 +215,11 @@ interface AliradaContextValue {
     quantity: number;
     google_map_link?: string;
     notes?: string;
-  }) => Promise<boolean>;
+    c2p_ref_code?: string;
+    c2p_payment_link?: string;
+    trigger_type?: string;
+    trigger_payload?: string;
+  }) => Promise<Order | null>;
   confirmOrderDelivery: (payload: {
     order: Order;
     status: 'Delivered' | 'Partially Delivered' | 'Rejected';
@@ -218,7 +227,24 @@ interface AliradaContextValue {
     notes?: string;
     rejection_reason?: string;
   }) => Promise<boolean>;
-  investInListing: (listing: Listing, amountPoints: number) => Promise<boolean>;
+  investInProject: (project: Project, amountPoints: number) => Promise<boolean>;
+  updateProjectInvestmentConfig: (
+    projectId: string,
+    patch: {
+      investment_goal_points?: number;
+      budget_doc_url?: string;
+      presentation_url?: string;
+      investment_status?: 'Open' | 'Deactivated' | 'Closed';
+    }
+  ) => Promise<boolean>;
+  submitProjectInvestmentReport: (payload: {
+    project: Project;
+    title: string;
+    summary_text: string;
+    links: ProjectInvestmentReportLink[];
+    period_cost_points: number;
+    period_income_points: number;
+  }) => Promise<boolean>;
   // Projects & Employment
   createProject: (payload: {
     name: string;
@@ -228,6 +254,9 @@ interface AliradaContextValue {
     location?: string;
     google_map_link?: string;
     contact_info?: string;
+    investment_goal_points?: number;
+    budget_doc_url?: string;
+    presentation_url?: string;
   }) => Promise<boolean>;
   joinOrRequestProject: (project: Project) => Promise<boolean>;
   approveProjectMember: (projectId: string, applicantUid: string) => Promise<void>;
@@ -278,7 +307,19 @@ interface AliradaContextValue {
     trigger_type: TriggerType;
     trigger_payload?: string;
   }) => Promise<TransactionRef | null>;
-  redeemTransactionRef: (refCode: string) => Promise<{ ok: boolean; ref?: TransactionRef; message: string }>;
+  redeemTransactionRef: (
+    refCode: string,
+    quantity?: number,
+    orderDetails?: { google_map_link?: string; notes?: string }
+  ) => Promise<{
+    ok: boolean;
+    ref?: TransactionRef;
+    order?: Order;
+    settledPoints?: number;
+    triggerExecuted?: { type: string; payload?: string };
+    message: string;
+  }>;
+  deactivateTransactionRef: (id: string, nextStatus: 'Deactivated' | 'Cancelled') => Promise<boolean>;
   deleteTransactionRef: (id: string) => Promise<boolean>;
   saveBatchPayment: (payload: {
     id?: string;
@@ -293,6 +334,7 @@ interface AliradaContextValue {
   createPointExchange: (pointsRequested: number, cashAmount: number, currency: string, notes?: string) => Promise<boolean>;
   submitExchangeProof: (exchangeId: string, paymentProof: string) => Promise<boolean>;
   releasePointExchange: (exchangeId: string) => Promise<boolean>;
+  deactivatePointExchange: (exchangeId: string) => Promise<boolean>;
   cancelPointExchange: (exchangeId: string) => Promise<boolean>;
   // Governance & Reports & Admin
   saveGovernanceDelegate: (payload: {
@@ -305,8 +347,18 @@ interface AliradaContextValue {
     absent_period_days: number;
   }) => Promise<boolean>;
   voteForCeo: (governanceId: string, candidateUid: string) => Promise<void>;
-  submitUserReport: (targetType: UserReport['target_type'], targetId: string, reason: string) => Promise<boolean>;
-  resolveUserReport: (reportId: string, status: UserReport['status']) => Promise<void>;
+  submitUserReport: (
+    targetType: UserReport['target_type'],
+    targetId: string,
+    reason: string,
+    options?: { reportedUid?: string; snapshot?: string }
+  ) => Promise<boolean>;
+  resolveUserReport: (
+    reportId: string,
+    status: UserReport['status'],
+    adminComment?: string,
+    actionTaken?: string
+  ) => Promise<void>;
   updateSystemConfig: (patch: Partial<SystemConfigState>) => Promise<void>;
   applyAdminDiscipline: (
     targetProfileId: string,
@@ -372,6 +424,7 @@ const SEED_IDS = {
   jobs: new Set(SEED_EMPLOYMENT.map((x) => x.id)),
   orders: new Set(SEED_ORDERS.map((x) => x.id)),
   investments: new Set(SEED_INVESTMENTS.map((x) => x.id)),
+  projectReports: new Set(SEED_PROJECT_REPORTS.map((x) => x.id)),
   exchanges: new Set(SEED_POINT_EXCHANGES.map((x) => x.id)),
   refs: new Set(SEED_TRANSACTION_REFS.map((x) => x.id)),
   batches: new Set(SEED_BATCH_PAYMENTS.map((x) => x.id)),
@@ -406,10 +459,17 @@ export const AliradaProvider: React.FC<{ children: React.ReactNode }> = ({ child
     }
     return '';
   });
+  const [activeCheckoutRefCode, setActiveCheckoutRefCode] = useState<string | null>(() => {
+    if (typeof window !== 'undefined') {
+      const param = new URLSearchParams(window.location.search).get('pay_ref');
+      return param ? param.trim().toUpperCase() : null;
+    }
+    return null;
+  });
 
   useEffect(() => {
     if (pendingPayRef) {
-      setActiveSection('payments');
+      setActiveCheckoutRefCode(pendingPayRef);
     }
   }, [pendingPayRef]);
 
@@ -467,6 +527,9 @@ export const AliradaProvider: React.FC<{ children: React.ReactNode }> = ({ child
 
   const [liveInvestments, setLiveInvestments] = useState<Investment[]>([]);
   const [localInvestments, setLocalInvestments] = useState<Investment[]>(SEED_INVESTMENTS);
+
+  const [liveProjectReports, setLiveProjectReports] = useState<ProjectInvestmentReport[]>([]);
+  const [localProjectReports, setLocalProjectReports] = useState<ProjectInvestmentReport[]>(SEED_PROJECT_REPORTS);
 
   const [liveExchanges, setLiveExchanges] = useState<PointExchange[]>([]);
   const [localExchanges, setLocalExchanges] = useState<PointExchange[]>(SEED_POINT_EXCHANGES);
@@ -780,6 +843,7 @@ export const AliradaProvider: React.FC<{ children: React.ReactNode }> = ({ child
     setLocalEmployment((prev) => prev.filter((x) => !SEED_IDS.jobs.has(x.id)));
     setLocalOrders((prev) => prev.filter((x) => !SEED_IDS.orders.has(x.id)));
     setLocalInvestments((prev) => prev.filter((x) => !SEED_IDS.investments.has(x.id)));
+    setLocalProjectReports((prev) => prev.filter((x) => !SEED_IDS.projectReports.has(x.id)));
     setLocalExchanges((prev) => prev.filter((x) => !SEED_IDS.exchanges.has(x.id)));
     setLocalRefs((prev) => prev.filter((x) => !SEED_IDS.refs.has(x.id)));
     setLocalBatches((prev) => prev.filter((x) => !SEED_IDS.batches.has(x.id)));
@@ -829,36 +893,39 @@ export const AliradaProvider: React.FC<{ children: React.ReactNode }> = ({ child
       unsubs.push(unsub);
     };
 
+    const bindMultiCollection = <T extends { id: string }>(
+      colName: string,
+      setter: React.Dispatch<React.SetStateAction<T[]>>,
+      queries: ReturnType<typeof query>[]
+    ) => {
+      const buckets: T[][] = queries.map(() => []);
+      const flush = () => {
+        const merged = new Map<string, T>();
+        buckets.forEach((rows) => {
+          rows.forEach((item) => merged.set(item.id, item));
+        });
+        setter(Array.from(merged.values()));
+      };
+      queries.forEach((q, idx) => {
+        unsubs.push(
+          onSnapshot(
+            q,
+            (snap) => {
+              buckets[idx] = snap.docs.map((d) => mapDocRow<T>(d));
+              flush();
+            },
+            (err) => handleFirestoreError(err, OperationType.LIST, colName)
+          )
+        );
+      });
+    };
+
     const bindDualCollection = <T extends { id: string }>(
       colName: string,
       setter: React.Dispatch<React.SetStateAction<T[]>>,
       q1: ReturnType<typeof query>,
       q2: ReturnType<typeof query>
-    ) => {
-      let rowsA: T[] = [];
-      let rowsB: T[] = [];
-      const flush = () => setter(mergeById(rowsA, rowsB));
-      unsubs.push(
-        onSnapshot(
-          q1,
-          (snap) => {
-            rowsA = snap.docs.map((d) => mapDocRow<T>(d));
-            flush();
-          },
-          (err) => handleFirestoreError(err, OperationType.LIST, colName)
-        )
-      );
-      unsubs.push(
-        onSnapshot(
-          q2,
-          (snap) => {
-            rowsB = snap.docs.map((d) => mapDocRow<T>(d));
-            flush();
-          },
-          (err) => handleFirestoreError(err, OperationType.LIST, colName)
-        )
-      );
-    };
+    ) => bindMultiCollection<T>(colName, setter, [q1, q2]);
 
     bindCollection<AliradaProfile>(
       'profiles',
@@ -953,12 +1020,15 @@ export const AliradaProvider: React.FC<{ children: React.ReactNode }> = ({ child
         query(collection(db, 'deliveries'), where('receiver_auth_uid', '==', firebaseUser.uid)),
         query(collection(db, 'deliveries'), where('seller_auth_uid', '==', firebaseUser.uid))
       );
-      bindDualCollection<TransactionRef>(
-        'transaction_refs',
-        setLiveRefs,
+      bindMultiCollection<TransactionRef>('transaction_refs', setLiveRefs, [
         query(collection(db, 'transaction_refs'), where('issuer_auth_uid', '==', firebaseUser.uid)),
-        query(collection(db, 'transaction_refs'), where('counterparty_auth_uid', '==', firebaseUser.uid))
-      );
+        query(collection(db, 'transaction_refs'), where('counterparty_auth_uid', '==', firebaseUser.uid)),
+        query(
+          collection(db, 'transaction_refs'),
+          where('participant_auth_uids', 'array-contains', firebaseUser.uid)
+        ),
+        query(collection(db, 'transaction_refs'), where('status', '==', 'Open')),
+      ]);
       bindCollection<BatchPayment>(
         'batch_payments',
         setLiveBatches,
@@ -980,6 +1050,11 @@ export const AliradaProvider: React.FC<{ children: React.ReactNode }> = ({ child
       'investments',
       setLiveInvestments,
       query(collection(db, 'investments'), where('invested_points', '>', 0))
+    );
+    bindCollection<ProjectInvestmentReport>(
+      'project_investment_reports',
+      setLiveProjectReports,
+      query(collection(db, 'project_investment_reports'), where('period_cost_points', '>=', 0))
     );
     bindCollection<PointExchange>(
       'point_exchanges',
@@ -1067,6 +1142,10 @@ export const AliradaProvider: React.FC<{ children: React.ReactNode }> = ({ child
     () => (isLiveFirestore ? mergeById(liveInvestments, localInvestments) : localInvestments),
     [isLiveFirestore, liveInvestments, localInvestments]
   );
+  const projectReports = useMemo(
+    () => (isLiveFirestore ? mergeById(liveProjectReports, localProjectReports) : localProjectReports),
+    [isLiveFirestore, liveProjectReports, localProjectReports]
+  );
   const pointExchanges = useMemo(
     () => (isLiveFirestore ? mergeById(liveExchanges, localExchanges) : localExchanges),
     [isLiveFirestore, liveExchanges, localExchanges]
@@ -1104,6 +1183,7 @@ export const AliradaProvider: React.FC<{ children: React.ReactNode }> = ({ child
       localEmployment.filter((x) => SEED_IDS.jobs.has(x.id)).length +
       localOrders.filter((x) => SEED_IDS.orders.has(x.id)).length +
       localInvestments.filter((x) => SEED_IDS.investments.has(x.id)).length +
+      localProjectReports.filter((x) => SEED_IDS.projectReports.has(x.id)).length +
       localExchanges.filter((x) => SEED_IDS.exchanges.has(x.id)).length +
       localRefs.filter((x) => SEED_IDS.refs.has(x.id)).length +
       localBatches.filter((x) => SEED_IDS.batches.has(x.id)).length +
@@ -1121,6 +1201,7 @@ export const AliradaProvider: React.FC<{ children: React.ReactNode }> = ({ child
     localEmployment,
     localOrders,
     localInvestments,
+    localProjectReports,
     localExchanges,
     localRefs,
     localBatches,
@@ -1599,6 +1680,18 @@ export const AliradaProvider: React.FC<{ children: React.ReactNode }> = ({ child
       pushToast('error', 'Self-recognition voting is strictly prohibited.');
       return false;
     }
+    const hasReceivedService = serviceLogs.some(
+      (l) =>
+        l.provider_uid.toUpperCase() === cleanTarget &&
+        l.recipient_uid.toUpperCase() === currentProfile.universal_id.toUpperCase()
+    );
+    if (!hasReceivedService) {
+      pushToast(
+        'error',
+        `Only members who received a logged service from ${cleanTarget} can submit recognition.`
+      );
+      return false;
+    }
     if (!comment.trim()) {
       pushToast('error', 'Please provide an audit reason/comment for recognition.');
       return false;
@@ -1612,6 +1705,8 @@ export const AliradaProvider: React.FC<{ children: React.ReactNode }> = ({ child
       recognizer_auth_uid: firebaseUser?.uid || currentProfile.uid,
       direction,
       comment: comment.trim(),
+      reply: existingVote?.reply,
+      replied_at: existingVote?.replied_at,
       created_at: existingVote?.created_at || new Date().toISOString(),
     };
     const prevVotes = localVotes;
@@ -1653,14 +1748,48 @@ export const AliradaProvider: React.FC<{ children: React.ReactNode }> = ({ child
     return true;
   };
 
-  // Marketplace & Crowdfunding
+  const replyToRecognition: AliradaContextValue['replyToRecognition'] = async (voteId, replyText) => {
+    if (!requireVerifiedAuth()) return false;
+    const targetVote = recognitionVotes.find((v) => v.id === voteId);
+    if (!targetVote) return false;
+    if (
+      targetVote.target_uid.toUpperCase() !== currentProfile.universal_id.toUpperCase() &&
+      !isAdmin
+    ) {
+      pushToast('error', 'Only the member who received this recognition can reply to it.');
+      return false;
+    }
+    const cleanReply = replyText.trim().slice(0, 500);
+    if (!cleanReply) {
+      pushToast('error', 'Reply text cannot be empty.');
+      return false;
+    }
+    const repliedAt = new Date().toISOString();
+    setLocalVotes((prev) =>
+      prev.map((v) =>
+        v.id === voteId ? { ...v, reply: cleanReply, replied_at: repliedAt } : v
+      )
+    );
+    if (isLiveFirestore && firebaseUser && !SEED_IDS.votes.has(voteId)) {
+      try {
+        await updateDoc(doc(db, 'recognition_votes', voteId), {
+          reply: cleanReply,
+          replied_at: repliedAt,
+          updatedAt: serverTimestamp(),
+        });
+      } catch (err) {
+        handleFirestoreError(err, OperationType.UPDATE, `recognition_votes/${voteId}`);
+      }
+    }
+    pushToast('success', 'Reply recorded on peer recognition.');
+    return true;
+  };
+
+  // Marketplace & Project Investment Links
   const createListing: AliradaContextValue['createListing'] = async (payload) => {
     if (!requireVerifiedAuth()) return false;
     const id = makeId('lst');
     const listingCode = `LST-${payload.listing_type.slice(0, 4).toUpperCase()}-${String(listings.length + 10)}`;
-    const hasGoal = (payload.investment_goal_points || 0) > 0;
-    const initialAvailability: 'Funding' | 'Active' =
-      payload.availability_status || (hasGoal ? 'Funding' : 'Active');
     const cleanTitle = payload.title.trim().slice(0, 160);
     const cleanCategory = (payload.category || 'Crafts & Production').trim().slice(0, 100);
     const cleanDescription = payload.description.trim().slice(0, 2000);
@@ -1682,9 +1811,9 @@ export const AliradaProvider: React.FC<{ children: React.ReactNode }> = ({ child
       google_map_link: sanitizeExternalLink(payload.google_map_link),
       video_url: sanitizeExternalLink(payload.video_url),
       evidence_link: sanitizeExternalLink(payload.evidence_link),
-      budget_doc_url: sanitizeExternalLink(payload.budget_doc_url),
-      presentation_url: sanitizeExternalLink(payload.presentation_url),
-      availability_status: initialAvailability,
+      linked_project_id: payload.linked_project_id || undefined,
+      availability_status: 'Active',
+      is_deactivated: false,
       obligation_status: 'None',
       created_at: new Date().toISOString(),
     };
@@ -1710,11 +1839,10 @@ export const AliradaProvider: React.FC<{ children: React.ReactNode }> = ({ child
           price_points: record.price_points,
           payment_model: record.payment_model,
           end_date: record.end_date || '',
-          investment_goal_points: record.investment_goal_points || 0,
-          budget_doc_url: record.budget_doc_url || '',
-          presentation_url: record.presentation_url || '',
+          linked_project_id: record.linked_project_id || '',
           entity_type: currentProfile.entity_type,
-          availability_status: initialAvailability,
+          availability_status: 'Active',
+          is_deactivated: false,
           obligation_status: 'None',
           createdAt: serverTimestamp(),
           updatedAt: serverTimestamp(),
@@ -1729,12 +1857,7 @@ export const AliradaProvider: React.FC<{ children: React.ReactNode }> = ({ child
         return false;
       }
     }
-    pushToast(
-      'success',
-      initialAvailability === 'Funding'
-        ? `Listing ${record.listing_code} published in Funding Phase (orders unlock once funded or activated).`
-        : `Listing ${record.listing_code} published and Active for orders.`
-    );
+    pushToast('success', `Listing ${record.listing_code} published and Active for orders.`);
     return true;
   };
 
@@ -1743,7 +1866,7 @@ export const AliradaProvider: React.FC<{ children: React.ReactNode }> = ({ child
     const existing = listings.find((l) => l.id === id);
     if (!existing) return false;
     if (existing.obligation_status === 'HasObligations' && !isAdmin) {
-      pushToast('error', 'Cannot edit listing after orders or investments exist.');
+      pushToast('error', 'Cannot edit core terms after orders exist. You may deactivate new orders instead.');
       return false;
     }
     setLocalListings((prev) => prev.map((l) => (l.id === id ? { ...l, ...patch } : l)));
@@ -1764,10 +1887,9 @@ export const AliradaProvider: React.FC<{ children: React.ReactNode }> = ({ child
           'price_points',
           'payment_model',
           'end_date',
-          'investment_goal_points',
-          'budget_doc_url',
-          'presentation_url',
+          'linked_project_id',
           'availability_status',
+          'is_deactivated',
           'obligation_status',
         ];
         allowedKeys.forEach((k) => {
@@ -1782,48 +1904,44 @@ export const AliradaProvider: React.FC<{ children: React.ReactNode }> = ({ child
     return true;
   };
 
-  const activateListingForOrders: AliradaContextValue['activateListingForOrders'] = async (listingId) => {
+  const deactivateListing: AliradaContextValue['deactivateListing'] = async (listingId, deactivated) => {
     if (!requireVerifiedAuth()) return false;
     const target = listings.find((l) => l.id === listingId);
     if (!target) return false;
     if (target.owner_uid !== currentProfile.universal_id && !isAdmin) {
-      pushToast('error', 'Only the listing owner or an administrator can activate orders.');
+      pushToast('error', 'Only the listing owner or administrator can deactivate or reactivate a listing.');
       return false;
     }
-    const previousStatus = target.availability_status;
+    const nextAvailability: 'Active' | 'Deactivated' = deactivated ? 'Deactivated' : 'Active';
     setLocalListings((prev) =>
-      prev.map((l) => (l.id === listingId ? { ...l, availability_status: 'Active' } : l))
+      prev.map((l) =>
+        l.id === listingId
+          ? { ...l, is_deactivated: deactivated, availability_status: nextAvailability }
+          : l
+      )
     );
-    if (SEED_IDS.listings.has(listingId)) {
-      try {
-        const raw = localStorage.getItem('alirada_activated_seed_listings');
-        const list: string[] = raw ? JSON.parse(raw) : [];
-        if (!list.includes(listingId)) {
-          localStorage.setItem('alirada_activated_seed_listings', JSON.stringify([...list, listingId]));
-        }
-      } catch {
-        // ignore storage errors
-      }
-    } else if (isLiveFirestore && firebaseUser) {
+    if (isLiveFirestore && firebaseUser && !SEED_IDS.listings.has(listingId)) {
       try {
         await updateDoc(doc(db, 'listings', listingId), {
-          availability_status: 'Active',
+          is_deactivated: deactivated,
+          availability_status: nextAvailability,
           updatedAt: serverTimestamp(),
         });
       } catch (err) {
-        console.error('Activate listing Firestore error:', err);
-        setLocalListings((prev) =>
-          prev.map((l) => (l.id === listingId ? { ...l, availability_status: previousStatus } : l))
-        );
-        pushToast(
-          'error',
-          err instanceof Error ? `Could not activate listing: ${err.message}` : 'Could not activate listing.'
-        );
-        return false;
+        handleFirestoreError(err, OperationType.UPDATE, `listings/${listingId}`);
       }
     }
-    pushToast('success', `${target.listing_code} is now Active and open for customer orders.`);
+    pushToast(
+      deactivated ? 'warning' : 'success',
+      deactivated
+        ? `${target.listing_code} deactivated for new buyers. Existing active orders & period commitments must still be fulfilled.`
+        : `${target.listing_code} reactivated for new orders.`
+    );
     return true;
+  };
+
+  const activateListingForOrders: AliradaContextValue['activateListingForOrders'] = async (listingId) => {
+    return deactivateListing(listingId, false);
   };
 
   const deleteListing: AliradaContextValue['deleteListing'] = async (id) => {
@@ -1831,7 +1949,7 @@ export const AliradaProvider: React.FC<{ children: React.ReactNode }> = ({ child
     const existing = listings.find((l) => l.id === id);
     if (!existing) return false;
     if (existing.obligation_status === 'HasObligations' && !isAdmin) {
-      pushToast('error', 'Cannot delete listing with active orders or investments.');
+      pushToast('error', 'Cannot delete listing with active orders. Use Deactivate instead.');
       return false;
     }
     setLocalListings((prev) => prev.filter((l) => l.id !== id));
@@ -1851,27 +1969,29 @@ export const AliradaProvider: React.FC<{ children: React.ReactNode }> = ({ child
     quantity,
     google_map_link,
     notes,
+    c2p_ref_code,
+    c2p_payment_link,
+    trigger_type,
+    trigger_payload,
   }) => {
-    if (!requireVerifiedAuth()) return false;
+    if (!requireVerifiedAuth()) return null;
     if (listing.owner_uid === currentProfile.universal_id) {
       pushToast('error', 'Self-order prohibited: You cannot order your own listing.');
-      return false;
+      return null;
     }
-    if (getEffectiveListingAvailability(listing, investments) === 'Funding') {
-      pushToast(
-        'error',
-        'Orders are locked during the Investment Phase. Invest toward the goal or wait for owner activation.'
-      );
-      return false;
+    if (getEffectiveListingAvailability(listing) === 'Deactivated') {
+      pushToast('error', `${listing.listing_code} is deactivated and no longer accepts new orders.`);
+      return null;
     }
-    const totalPoints = Number((listing.price_points * quantity).toFixed(2));
+    const cleanQty = Math.max(1, Math.round(quantity || 1));
+    const totalPoints = Number((listing.price_points * cleanQty).toFixed(2));
     const myBalance = metricsMap[currentProfile.universal_id]?.balance ?? 0;
     if (myBalance - totalPoints < systemConfig.negative_points_floor) {
       pushToast(
         'error',
         `Order exceeds negative balance floor (${systemConfig.negative_points_floor} pts).`
       );
-      return false;
+      return null;
     }
     const id = makeId('ord');
     const order: Order = {
@@ -1885,7 +2005,7 @@ export const AliradaProvider: React.FC<{ children: React.ReactNode }> = ({ child
       listing_id: listing.id,
       listing_code: listing.listing_code,
       listing_type: listing.listing_type,
-      quantity,
+      quantity: cleanQty,
       total_points: totalPoints,
       payment_model: listing.payment_model,
       end_date: listing.end_date,
@@ -1893,6 +2013,10 @@ export const AliradaProvider: React.FC<{ children: React.ReactNode }> = ({ child
       notes: notes?.trim() || '',
       order_status: 'Confirmed',
       delivery_status: 'Awaiting',
+      c2p_ref_code: c2p_ref_code || '',
+      c2p_payment_link: c2p_payment_link || '',
+      trigger_type: trigger_type || '',
+      trigger_payload: trigger_payload || '',
       obligation_status: 'HasObligations',
       created_at: new Date().toISOString(),
     };
@@ -1921,6 +2045,10 @@ export const AliradaProvider: React.FC<{ children: React.ReactNode }> = ({ child
           notes: order.notes || '',
           order_status: order.order_status,
           delivery_status: order.delivery_status,
+          c2p_ref_code: order.c2p_ref_code || '',
+          c2p_payment_link: order.c2p_payment_link || '',
+          trigger_type: order.trigger_type || '',
+          trigger_payload: order.trigger_payload || '',
           obligation_status: 'HasObligations',
           createdAt: serverTimestamp(),
           updatedAt: serverTimestamp(),
@@ -1938,11 +2066,11 @@ export const AliradaProvider: React.FC<{ children: React.ReactNode }> = ({ child
           'error',
           err instanceof Error ? `Order failed: ${err.message}` : 'Could not submit order.'
         );
-        return false;
+        return null;
       }
     }
     pushToast('success', `Order ${order.order_number} confirmed (${totalPoints} pts).`);
-    return true;
+    return order;
   };
 
   const confirmOrderDelivery: AliradaContextValue['confirmOrderDelivery'] = async ({
@@ -1986,16 +2114,21 @@ export const AliradaProvider: React.FC<{ children: React.ReactNode }> = ({ child
       )
     );
 
-    // Proportional investor dividend settlement on Delivered
+    // Proportional shareholder dividend settlement on Delivered (via linked_project_id or legacy listing_id)
     const dividendUpdates: { id: string; nextDividends: number }[] = [];
     if (status === 'Delivered') {
-      const listingInvs = investments.filter(
-        (i) => i.listing_id === order.listing_id && i.status === 'Active'
+      const linkedListing = listings.find((l) => l.id === order.listing_id);
+      const linkedProjectId = linkedListing?.linked_project_id;
+      const targetInvs = investments.filter(
+        (i) =>
+          i.status === 'Active' &&
+          ((linkedProjectId && (i.project_id === linkedProjectId || i.listing_id === linkedProjectId)) ||
+            i.listing_id === order.listing_id)
       );
-      if (listingInvs.length > 0) {
+      if (targetInvs.length > 0) {
         const dividendPool = Number((order.total_points * 0.15).toFixed(2));
-        const totalSharePct = listingInvs.reduce((acc, i) => acc + i.share_percentage, 0) || 100;
-        listingInvs.forEach((inv) => {
+        const totalSharePct = targetInvs.reduce((acc, i) => acc + i.share_percentage, 0) || 100;
+        targetInvs.forEach((inv) => {
           const shareRatio = inv.share_percentage / Math.max(totalSharePct, 100);
           const payout = Number((dividendPool * shareRatio).toFixed(2));
           dividendUpdates.push({
@@ -2051,21 +2184,26 @@ export const AliradaProvider: React.FC<{ children: React.ReactNode }> = ({ child
     pushToast(
       status === 'Rejected' ? 'warning' : 'success',
       status === 'Delivered'
-        ? `Delivery confirmed for ${order.order_number}. Seller settled & investor dividends distributed.`
+        ? `Delivery confirmed for ${order.order_number}. Seller settled & project dividends distributed.`
         : `Order ${order.order_number} marked ${status}.`
     );
     return true;
   };
 
-  const investInListing: AliradaContextValue['investInListing'] = async (listing, amountPoints) => {
+  // Project Investments & Shareholder Reports
+  const investInProject: AliradaContextValue['investInProject'] = async (project, amountPoints) => {
     if (!requireVerifiedAuth()) return false;
     if (!Number.isFinite(amountPoints) || amountPoints <= 0) {
       pushToast('error', 'Investment amount must be greater than zero.');
       return false;
     }
-    const goal = listing.investment_goal_points || 0;
+    if (project.investment_status === 'Deactivated' || project.investment_status === 'Closed') {
+      pushToast('error', `Investment round for ${project.name} is ${project.investment_status}.`);
+      return false;
+    }
+    const goal = project.investment_goal_points || 0;
     if (goal <= 0) {
-      pushToast('error', 'This listing does not have an active crowdfunding goal.');
+      pushToast('error', 'This project does not have an open investment goal configured yet.');
       return false;
     }
     const myBalance = metricsMap[currentProfile.universal_id]?.balance ?? 0;
@@ -2076,17 +2214,6 @@ export const AliradaProvider: React.FC<{ children: React.ReactNode }> = ({ child
       );
       return false;
     }
-    const existingInvested = investments
-      .filter((i) => i.listing_id === listing.id && i.status === 'Active')
-      .reduce((acc, i) => acc + i.invested_points, 0);
-    const nextTotalInvested = existingInvested + amountPoints;
-    const goalReached = goal > 0 && nextTotalInvested >= goal;
-    const previousAvailability = listing.availability_status;
-    const previousObligation = listing.obligation_status;
-    const nextAvailability: 'Funding' | 'Active' = goalReached
-      ? 'Active'
-      : listing.availability_status || 'Funding';
-
     const sharePct = Number(Math.min(100, (amountPoints / goal) * 100).toFixed(2));
     const id = makeId('inv');
     const inv: Investment = {
@@ -2094,29 +2221,23 @@ export const AliradaProvider: React.FC<{ children: React.ReactNode }> = ({ child
       investment_code: `INV-${new Date().getFullYear()}-${String(investments.length + 10).padStart(3, '0')}`,
       investor_uid: currentProfile.universal_id,
       investor_auth_uid: firebaseUser?.uid || currentProfile.uid,
-      listing_id: listing.id,
-      listing_code: listing.listing_code,
-      target_type: `${listing.listing_type} Crowdfund`,
+      project_id: project.id,
+      project_code: project.project_code,
+      listing_id: project.id,
+      listing_code: project.project_code,
+      target_type: 'Project Investment',
       invested_points: amountPoints,
       share_percentage: sharePct,
-      budget_doc_link: listing.budget_doc_url,
-      presentation_link: listing.presentation_url,
+      budget_doc_link: project.budget_doc_url,
+      presentation_link: project.presentation_url,
       dividends_earned: 0,
       status: 'Active',
       obligation_status: 'HasObligations',
       created_at: new Date().toISOString(),
     };
     setLocalInvestments((prev) => [inv, ...prev]);
-    setLocalListings((prev) =>
-      prev.map((l) =>
-        l.id === listing.id
-          ? {
-              ...l,
-              obligation_status: 'HasObligations',
-              availability_status: nextAvailability,
-            }
-          : l
-      )
+    setLocalProjects((prev) =>
+      prev.map((p) => (p.id === project.id ? { ...p, obligation_status: 'HasObligations' } : p))
     );
 
     if (isLiveFirestore && firebaseUser) {
@@ -2125,6 +2246,8 @@ export const AliradaProvider: React.FC<{ children: React.ReactNode }> = ({ child
           investment_code: inv.investment_code,
           investor_uid: inv.investor_uid,
           investor_auth_uid: firebaseUser.uid,
+          project_id: inv.project_id,
+          project_code: inv.project_code,
           listing_id: inv.listing_id,
           listing_code: inv.listing_code,
           target_type: inv.target_type,
@@ -2138,59 +2261,186 @@ export const AliradaProvider: React.FC<{ children: React.ReactNode }> = ({ child
           createdAt: serverTimestamp(),
           updatedAt: serverTimestamp(),
         });
-        if (SEED_IDS.listings.has(listing.id)) {
-          if (goalReached) {
-            try {
-              const raw = localStorage.getItem('alirada_activated_seed_listings');
-              const list: string[] = raw ? JSON.parse(raw) : [];
-              if (!list.includes(listing.id)) {
-                localStorage.setItem('alirada_activated_seed_listings', JSON.stringify([...list, listing.id]));
-              }
-            } catch {
-              // ignore storage errors
-            }
-          }
-        } else {
-          await updateDoc(
-            doc(db, 'listings', listing.id),
-            goalReached
-              ? {
-                  obligation_status: 'HasObligations',
-                  availability_status: 'Active',
-                  updatedAt: serverTimestamp(),
-                }
-              : {
-                  obligation_status: 'HasObligations',
-                  updatedAt: serverTimestamp(),
-                }
-          );
+        if (!SEED_IDS.projects.has(project.id)) {
+          await updateDoc(doc(db, 'projects', project.id), {
+            obligation_status: 'HasObligations',
+            updatedAt: serverTimestamp(),
+          });
         }
       } catch (err) {
-        console.error('Investment Firestore error:', err);
+        console.error('Project investment Firestore error:', err);
         setLocalInvestments((prev) => prev.filter((item) => item.id !== id));
-        setLocalListings((prev) =>
-          prev.map((l) =>
-            l.id === listing.id
-              ? {
-                  ...l,
-                  obligation_status: previousObligation,
-                  availability_status: previousAvailability,
-                }
-              : l
-          )
-        );
         pushToast(
           'error',
-          err instanceof Error ? `Investment failed: ${err.message}` : 'Could not commit investment.'
+          err instanceof Error ? `Investment failed: ${err.message}` : 'Could not commit project investment.'
         );
         return false;
       }
     }
+    pushToast('success', `Invested ${amountPoints} pts (${sharePct}% share) in project "${project.name}".`);
+    return true;
+  };
+
+  const updateProjectInvestmentConfig: AliradaContextValue['updateProjectInvestmentConfig'] = async (
+    projectId,
+    patch
+  ) => {
+    if (!requireVerifiedAuth()) return false;
+    const prj = projects.find((p) => p.id === projectId);
+    if (!prj) return false;
+    const isLeader =
+      prj.owner_uid === currentProfile.universal_id ||
+      prj.elected_ceo_uid === currentProfile.universal_id ||
+      isAdmin;
+    if (!isLeader) {
+      pushToast('error', 'Only the Project Owner, Elected CEO, or Admin can update investment terms.');
+      return false;
+    }
+    const cleanPatch = {
+      ...(patch.investment_goal_points !== undefined
+        ? { investment_goal_points: patch.investment_goal_points }
+        : {}),
+      ...(patch.budget_doc_url !== undefined
+        ? { budget_doc_url: sanitizeExternalLink(patch.budget_doc_url) }
+        : {}),
+      ...(patch.presentation_url !== undefined
+        ? { presentation_url: sanitizeExternalLink(patch.presentation_url) }
+        : {}),
+      ...(patch.investment_status !== undefined
+        ? { investment_status: patch.investment_status }
+        : {}),
+    };
+    setLocalProjects((prev) => prev.map((p) => (p.id === projectId ? { ...p, ...cleanPatch } : p)));
+    if (isLiveFirestore && firebaseUser && !SEED_IDS.projects.has(projectId)) {
+      try {
+        await updateDoc(doc(db, 'projects', projectId), {
+          ...cleanPatch,
+          updatedAt: serverTimestamp(),
+        });
+      } catch (err) {
+        handleFirestoreError(err, OperationType.UPDATE, `projects/${projectId}`);
+      }
+    }
+    pushToast('success', `Investment settings updated for ${prj.name}.`);
+    return true;
+  };
+
+  const submitProjectInvestmentReport: AliradaContextValue['submitProjectInvestmentReport'] = async ({
+    project,
+    title,
+    summary_text,
+    links,
+    period_cost_points,
+    period_income_points,
+  }) => {
+    if (!requireVerifiedAuth()) return false;
+    const isLeader =
+      project.owner_uid === currentProfile.universal_id ||
+      project.elected_ceo_uid === currentProfile.universal_id ||
+      isAdmin;
+    if (!isLeader) {
+      pushToast('error', 'Only the Project Owner or Elected CEO can publish shareholder reports.');
+      return false;
+    }
+    const cleanLinks = links
+      .map((l) => ({
+        label: l.label.trim().slice(0, 100) || 'Report Link',
+        url: sanitizeExternalLink(l.url) || '',
+      }))
+      .filter((l) => l.url.length > 0);
+    const existingReports = projectReports.filter((r) => r.project_id === project.id);
+    const prevCost = existingReports.reduce((acc, r) => acc + r.period_cost_points, 0);
+    const prevIncome = existingReports.reduce((acc, r) => acc + r.period_income_points, 0);
+    const totalAccCost = Number((prevCost + period_cost_points).toFixed(2));
+    const totalAccIncome = Number((prevIncome + period_income_points).toFixed(2));
+    const id = makeId('prj_rep');
+    const reportCode = `INV-RPT-${String(projectReports.length + 105)}`;
+    const report: ProjectInvestmentReport = {
+      id,
+      report_code: reportCode,
+      project_id: project.id,
+      project_code: project.project_code,
+      author_uid: currentProfile.universal_id,
+      author_auth_uid: firebaseUser?.uid || currentProfile.uid,
+      title: title.trim().slice(0, 160),
+      summary_text: summary_text.trim().slice(0, 2000),
+      links: cleanLinks,
+      period_cost_points: Number(period_cost_points),
+      period_income_points: Number(period_income_points),
+      total_accumulated_cost: totalAccCost,
+      total_accumulated_income: totalAccIncome,
+      created_at: new Date().toISOString(),
+    };
+    setLocalProjectReports((prev) => [...prev, report]);
+
+    // Notify every active shareholder of the project
+    const activeShareholders = investments.filter(
+      (i) => (i.project_id === project.id || i.listing_id === project.id) && i.status === 'Active'
+    );
+    const uniqueShareholders = new Map<string, string>();
+    activeShareholders.forEach((inv) => {
+      if (!uniqueShareholders.has(inv.investor_uid)) {
+        uniqueShareholders.set(inv.investor_uid, inv.investor_auth_uid);
+      }
+    });
+
+    const shareholderNotifications: PlatformNotification[] = [];
+    uniqueShareholders.forEach((authUid, investorUid) => {
+      shareholderNotifications.push({
+        id: makeId('notif'),
+        actor_uid: currentProfile.universal_id,
+        target_uid: investorUid,
+        target_auth_uid: authUid,
+        title: `Shareholder Report · ${project.project_code}`,
+        message: `${reportCode}: "${report.title}" · Cost +${report.period_cost_points} pts (Total ${totalAccCost}) · Income +${report.period_income_points} pts (Total ${totalAccIncome})`,
+        is_admin_alert: false,
+        read: false,
+        created_at: new Date().toISOString(),
+      });
+    });
+    if (shareholderNotifications.length > 0) {
+      setLocalNotifications((prev) => [...shareholderNotifications, ...prev]);
+    }
+
+    if (isLiveFirestore && firebaseUser) {
+      try {
+        await setDoc(doc(db, 'project_investment_reports', id), {
+          report_code: report.report_code,
+          project_id: report.project_id,
+          project_code: report.project_code,
+          author_uid: report.author_uid,
+          author_auth_uid: firebaseUser.uid,
+          title: report.title,
+          summary_text: report.summary_text,
+          links: report.links,
+          period_cost_points: report.period_cost_points,
+          period_income_points: report.period_income_points,
+          total_accumulated_cost: report.total_accumulated_cost,
+          total_accumulated_income: report.total_accumulated_income,
+          createdAt: serverTimestamp(),
+        });
+        for (const n of shareholderNotifications) {
+          if (n.target_auth_uid) {
+            await setDoc(doc(db, 'notifications', n.id), {
+              actor_uid: n.actor_uid,
+              target_uid: n.target_uid,
+              target_auth_uid: n.target_auth_uid,
+              title: n.title,
+              message: n.message.slice(0, 500),
+              is_admin_alert: false,
+              read: false,
+              createdAt: serverTimestamp(),
+            }).catch(() => {});
+          }
+        }
+      } catch (err) {
+        handleFirestoreError(err, OperationType.CREATE, `project_investment_reports/${id}`);
+      }
+    }
+
     pushToast(
       'success',
-      goalReached && previousAvailability !== 'Active'
-        ? `Invested ${amountPoints} pts! Funding goal met — ${listing.listing_code} is now Active for orders.`
-        : `Invested ${amountPoints} pts (${sharePct}% share) in ${listing.title}.`
+      `Shareholder report ${reportCode} published & ${uniqueShareholders.size} shareholder(s) notified.`
     );
     return true;
   };
@@ -2199,6 +2449,7 @@ export const AliradaProvider: React.FC<{ children: React.ReactNode }> = ({ child
   const createProject: AliradaContextValue['createProject'] = async (payload) => {
     if (!requireVerifiedAuth()) return false;
     const id = makeId('prj');
+    const goalPts = payload.investment_goal_points || 0;
     const prj: Project = {
       id,
       project_code: `PRJ-${new Date().getFullYear()}-${String(projects.length + 12)}`,
@@ -2214,6 +2465,10 @@ export const AliradaProvider: React.FC<{ children: React.ReactNode }> = ({ child
       contact_info: payload.contact_info?.trim() || '',
       image_urls: ['/src/assets/images/listing_civic_academy_1795619024414.jpg'],
       entity_type: currentProfile.entity_type,
+      investment_goal_points: goalPts > 0 ? goalPts : undefined,
+      budget_doc_url: sanitizeExternalLink(payload.budget_doc_url),
+      presentation_url: sanitizeExternalLink(payload.presentation_url),
+      investment_status: goalPts > 0 ? 'Open' : undefined,
       delegates: [],
       members: [currentProfile.universal_id],
       join_requests: [],
@@ -2238,6 +2493,10 @@ export const AliradaProvider: React.FC<{ children: React.ReactNode }> = ({ child
           contact_info: prj.contact_info || '',
           image_urls: prj.image_urls,
           entity_type: prj.entity_type || 'Individual',
+          investment_goal_points: goalPts > 0 ? goalPts : 0,
+          budget_doc_url: prj.budget_doc_url || '',
+          presentation_url: prj.presentation_url || '',
+          investment_status: goalPts > 0 ? 'Open' : 'Open',
           delegates: [],
           members: prj.members,
           join_requests: [],
@@ -2698,21 +2957,36 @@ export const AliradaProvider: React.FC<{ children: React.ReactNode }> = ({ child
   const issueTransactionRef: AliradaContextValue['issueTransactionRef'] = async (payload) => {
     if (!requireVerifiedAuth()) return null;
     const refCode = `${payload.ref_type}-${Math.random().toString(36).slice(2, 6).toUpperCase()}-${Math.floor(1000 + Math.random() * 9000)}`;
+    const linkedListing =
+      payload.ref_type === 'C2P' && payload.linked_listing_code
+        ? listings.find((l) => l.listing_code === payload.linked_listing_code)
+        : undefined;
+    const lockedAmount =
+      linkedListing && payload.ref_type === 'C2P'
+        ? linkedListing.price_points
+        : Number(payload.points_amount);
+    const initialStatus: TransactionRef['status'] = payload.ref_type === 'C2P' ? 'Open' : 'Pending';
+    const issuerAuthUid = firebaseUser?.uid || currentProfile.uid;
+
     const record: TransactionRef = {
       id: refCode,
       ref_code: refCode,
       ref_type: payload.ref_type,
       issuer_uid: currentProfile.universal_id,
-      issuer_auth_uid: firebaseUser?.uid || currentProfile.uid,
+      issuer_auth_uid: issuerAuthUid,
+      participant_auth_uids: [issuerAuthUid],
       linked_listing_code: payload.linked_listing_code || '',
-      widget_name: payload.widget_name || '',
-      points_amount: payload.points_amount,
-      payment_model: payload.payment_model,
-      end_date: payload.end_date || '',
+      widget_name: payload.widget_name || (linkedListing ? linkedListing.title : ''),
+      points_amount: lockedAmount,
+      payment_model: linkedListing ? linkedListing.payment_model : payload.payment_model,
+      end_date: linkedListing?.end_date || payload.end_date || '',
       description: payload.description || '',
       trigger_type: payload.trigger_type,
-      trigger_payload: payload.trigger_payload || '',
-      status: 'Pending',
+      trigger_payload: sanitizeExternalLink(payload.trigger_payload) || payload.trigger_payload || '',
+      status: initialStatus,
+      is_deactivated: false,
+      payments_count: 0,
+      c2p_settlements: [],
       obligation_status: 'None',
       created_at: new Date().toISOString(),
     };
@@ -2725,6 +2999,7 @@ export const AliradaProvider: React.FC<{ children: React.ReactNode }> = ({ child
           ref_type: record.ref_type,
           issuer_uid: record.issuer_uid,
           issuer_auth_uid: firebaseUser.uid,
+          participant_auth_uids: [firebaseUser.uid],
           linked_listing_code: record.linked_listing_code || '',
           widget_name: record.widget_name || '',
           points_amount: record.points_amount,
@@ -2733,7 +3008,10 @@ export const AliradaProvider: React.FC<{ children: React.ReactNode }> = ({ child
           description: record.description || '',
           trigger_type: record.trigger_type,
           trigger_payload: record.trigger_payload || '',
-          status: 'Pending',
+          status: initialStatus,
+          is_deactivated: false,
+          payments_count: 0,
+          c2p_settlements: [],
           obligation_status: 'None',
           createdAt: serverTimestamp(),
           updatedAt: serverTimestamp(),
@@ -2742,11 +3020,20 @@ export const AliradaProvider: React.FC<{ children: React.ReactNode }> = ({ child
         handleFirestoreError(err, OperationType.CREATE, `transaction_refs/${refCode}`);
       }
     }
-    pushToast('success', `Reference ${refCode} issued.`);
+    pushToast(
+      'success',
+      payload.ref_type === 'C2P'
+        ? `Open C2P Reference ${refCode} (${lockedAmount} pts) issued. Stays open until you cancel or deactivate it.`
+        : `P2P Reference ${refCode} issued.`
+    );
     return record;
   };
 
-  const redeemTransactionRef: AliradaContextValue['redeemTransactionRef'] = async (refCode) => {
+  const redeemTransactionRef: AliradaContextValue['redeemTransactionRef'] = async (
+    refCode,
+    quantity = 1,
+    orderDetails
+  ) => {
     if (!requireVerifiedAuth()) {
       return { ok: false, message: 'Please sign in with a verified email account first.' };
     }
@@ -2765,40 +3052,104 @@ export const AliradaProvider: React.FC<{ children: React.ReactNode }> = ({ child
     if (!ref) {
       return { ok: false, message: 'Reference code not found.' };
     }
-    if (ref.status !== 'Pending') {
-      return { ok: false, message: `Reference ${code} is already ${ref.status}.` };
+    if (ref.status === 'Deactivated' || ref.status === 'Cancelled' || ref.is_deactivated) {
+      return { ok: false, message: `Reference ${code} is ${ref.status} and closed for new payments.` };
+    }
+    if (ref.ref_type === 'P2P' && ref.status !== 'Pending') {
+      return { ok: false, message: `P2P Reference ${code} is already ${ref.status}.` };
+    }
+    if (ref.ref_type === 'C2P' && ref.status !== 'Open' && ref.status !== 'Pending') {
+      return { ok: false, message: `C2P Reference ${code} is ${ref.status}.` };
     }
     if (ref.issuer_uid === currentProfile.universal_id) {
       return {
         ok: false,
-        message: 'Self-redemption prohibited: You cannot redeem your own issued reference.',
+        message: 'Self-redemption prohibited: You cannot pay or redeem your own issued reference.',
       };
     }
 
-    const linkedOrderListing =
-      ref.trigger_type === 'Order Creation' && ref.linked_listing_code
-        ? listings.find((l) => l.listing_code === ref?.linked_listing_code)
-        : undefined;
-    if (
-      linkedOrderListing &&
-      getEffectiveListingAvailability(linkedOrderListing, investments) === 'Funding'
-    ) {
+    const linkedOrderListing = ref.linked_listing_code
+      ? listings.find((l) => l.listing_code === ref?.linked_listing_code)
+      : undefined;
+
+    if (linkedOrderListing && getEffectiveListingAvailability(linkedOrderListing) === 'Deactivated') {
       return {
         ok: false,
-        message: `Listing ${linkedOrderListing.listing_code} is still in its Investment Funding phase. Orders unlock once funded or activated.`,
+        message: `Listing ${linkedOrderListing.listing_code} is deactivated and cannot accept new orders.`,
       };
+    }
+
+    const cleanQty = Math.max(1, Math.round(quantity || 1));
+    const unitPoints = linkedOrderListing ? linkedOrderListing.price_points : ref.points_amount;
+    const settledPoints = Number((unitPoints * cleanQty).toFixed(2));
+    const myBalance = metricsMap[currentProfile.universal_id]?.balance ?? 0;
+
+    if (ref.ref_type === 'C2P' && myBalance - settledPoints < systemConfig.negative_points_floor) {
+      return {
+        ok: false,
+        message: `Payment exceeds negative balance floor (${systemConfig.negative_points_floor} pts).`,
+      };
+    }
+
+    const origin =
+      typeof window !== 'undefined' ? window.location.origin : 'https://alirada.com';
+    const payLink = `${origin}/?pay_ref=${encodeURIComponent(code)}`;
+
+    // Create linked Order whenever C2P is connected to a Marketplace Listing
+    let createdOrder: Order | null = null;
+    if (linkedOrderListing && linkedOrderListing.owner_uid !== currentProfile.universal_id) {
+      createdOrder = await placeOrder({
+        listing: linkedOrderListing,
+        quantity: cleanQty,
+        google_map_link: orderDetails?.google_map_link,
+        notes: orderDetails?.notes || `Settled via C2P reference ${code}`,
+        c2p_ref_code: code,
+        c2p_payment_link: payLink,
+        trigger_type: ref.trigger_type,
+        trigger_payload: ref.trigger_payload,
+      });
+      if (!createdOrder) {
+        return {
+          ok: false,
+          message: 'Could not create linked Marketplace order for this C2P payment.',
+        };
+      }
     }
 
     const confirmedAt = new Date().toISOString();
+    const payerAuthUid = firebaseUser?.uid || currentProfile.uid;
+    const nextParticipants = Array.from(
+      new Set([...(ref.participant_auth_uids || [ref.issuer_auth_uid]), payerAuthUid])
+    );
+
+    const newSettlement: C2PSettlementRecord = {
+      payer_uid: currentProfile.universal_id,
+      payer_auth_uid: payerAuthUid,
+      payer_email: currentProfile.email || '',
+      points_amount: settledPoints,
+      order_id: createdOrder?.id || '',
+      order_number: createdOrder?.order_number || '',
+      paid_at: confirmedAt,
+    };
+
+    const nextSettlements = [...(ref.c2p_settlements || []), newSettlement];
+    const nextStatus: TransactionRef['status'] = ref.ref_type === 'C2P' ? 'Open' : 'Confirmed';
+    const nextPaymentsCount = (ref.payments_count || 0) + 1;
+
     setLocalRefs((prev) =>
       prev.map((r) =>
         r.ref_code === code
           ? {
               ...r,
               counterparty_uid: currentProfile.universal_id,
-              counterparty_auth_uid: firebaseUser?.uid || currentProfile.uid,
+              counterparty_auth_uid: payerAuthUid,
+              participant_auth_uids: nextParticipants,
+              linked_order_id: createdOrder?.id || r.linked_order_id,
               payer_email: currentProfile.email || '',
-              status: 'Confirmed',
+              status: nextStatus,
+              payments_count: nextPaymentsCount,
+              last_paid_by_uid: currentProfile.universal_id,
+              c2p_settlements: nextSettlements,
               confirmed_at: confirmedAt,
               obligation_status: 'HasObligations',
             }
@@ -2811,8 +3162,13 @@ export const AliradaProvider: React.FC<{ children: React.ReactNode }> = ({ child
         await updateDoc(doc(db, 'transaction_refs', code), {
           counterparty_uid: currentProfile.universal_id,
           counterparty_auth_uid: firebaseUser.uid,
+          participant_auth_uids: nextParticipants,
+          linked_order_id: createdOrder?.id || ref.linked_order_id || '',
           payer_email: currentProfile.email || firebaseUser.email || '',
-          status: 'Confirmed',
+          status: nextStatus,
+          payments_count: nextPaymentsCount,
+          last_paid_by_uid: currentProfile.universal_id,
+          c2p_settlements: nextSettlements,
           confirmed_at: confirmedAt,
           obligation_status: 'HasObligations',
           updatedAt: serverTimestamp(),
@@ -2822,17 +3178,103 @@ export const AliradaProvider: React.FC<{ children: React.ReactNode }> = ({ child
       }
     }
 
-    // Trigger post-payment Order Creation if configured
-    if (linkedOrderListing && linkedOrderListing.owner_uid !== currentProfile.universal_id) {
-      await placeOrder({
-        listing: linkedOrderListing,
-        quantity: 1,
-        notes: `Auto-created via C2P reference ${code}`,
-      });
+    // Execute post-payment website / embed API triggers safely
+    const triggerEventPayload = {
+      type: 'ALIRADA_C2P_PAYMENT_CONFIRMED',
+      ref_code: code,
+      ref_type: ref.ref_type,
+      points_amount: settledPoints,
+      issuer_uid: ref.issuer_uid,
+      payer_uid: currentProfile.universal_id,
+      listing_code: ref.linked_listing_code || '',
+      order_id: createdOrder?.id || '',
+      order_number: createdOrder?.order_number || '',
+      trigger_type: ref.trigger_type,
+      trigger_payload: ref.trigger_payload || '',
+      paid_at: confirmedAt,
+    };
+
+    if (typeof window !== 'undefined') {
+      try {
+        window.postMessage(triggerEventPayload, '*');
+        if (window.parent && window.parent !== window) {
+          window.parent.postMessage(triggerEventPayload, '*');
+        }
+      } catch {
+        // non-fatal postMessage error
+      }
+      if (ref.trigger_type === 'Webhook/Notification' && ref.trigger_payload) {
+        const cleanHook = sanitizeExternalLink(ref.trigger_payload);
+        if (cleanHook) {
+          fetch(cleanHook, {
+            method: 'POST',
+            mode: 'no-cors',
+            headers: { 'Content-Type': 'text/plain' },
+            body: JSON.stringify(triggerEventPayload),
+          }).catch(() => {});
+        }
+      }
     }
 
-    pushToast('success', `Reference ${code} confirmed (${ref.points_amount} pts).`);
-    return { ok: true, ref, message: `Confirmed ${ref.points_amount} pts via ${code}.` };
+    pushToast(
+      'success',
+      createdOrder
+        ? `Paid ${settledPoints} pts via ${code} · Order ${createdOrder.order_number} created.`
+        : `Reference ${code} settled (${settledPoints} pts).`
+    );
+    return {
+      ok: true,
+      ref: {
+        ...ref,
+        status: nextStatus,
+        payments_count: nextPaymentsCount,
+        c2p_settlements: nextSettlements,
+      },
+      order: createdOrder || undefined,
+      settledPoints,
+      triggerExecuted:
+        ref.trigger_type !== 'None'
+          ? { type: ref.trigger_type, payload: ref.trigger_payload }
+          : undefined,
+      message: createdOrder
+        ? `Confirmed ${settledPoints} pts & created order ${createdOrder.order_number}.`
+        : `Confirmed ${settledPoints} pts via ${code}.`,
+    };
+  };
+
+  const deactivateTransactionRef: AliradaContextValue['deactivateTransactionRef'] = async (
+    id,
+    nextStatus
+  ) => {
+    if (!requireVerifiedAuth()) return false;
+    const existing = transactionRefs.find((r) => r.id === id);
+    if (!existing) return false;
+    if (existing.issuer_uid !== currentProfile.universal_id && !isAdmin) {
+      pushToast('error', 'Only the reference issuer or administrator can deactivate or cancel it.');
+      return false;
+    }
+    const isDeactivated = nextStatus === 'Deactivated' || nextStatus === 'Cancelled';
+    setLocalRefs((prev) =>
+      prev.map((r) =>
+        r.id === id ? { ...r, status: nextStatus, is_deactivated: isDeactivated } : r
+      )
+    );
+    if (isLiveFirestore && firebaseUser && !SEED_IDS.refs.has(id)) {
+      try {
+        await updateDoc(doc(db, 'transaction_refs', id), {
+          status: nextStatus,
+          is_deactivated: isDeactivated,
+          updatedAt: serverTimestamp(),
+        });
+      } catch (err) {
+        handleFirestoreError(err, OperationType.UPDATE, `transaction_refs/${id}`);
+      }
+    }
+    pushToast(
+      'warning',
+      `${existing.ref_code} marked ${nextStatus}. Existing paid orders & active period commitments must still be fulfilled.`
+    );
+    return true;
   };
 
   const deleteTransactionRef: AliradaContextValue['deleteTransactionRef'] = async (id) => {
@@ -2840,7 +3282,7 @@ export const AliradaProvider: React.FC<{ children: React.ReactNode }> = ({ child
     const existing = transactionRefs.find((r) => r.id === id);
     if (!existing) return false;
     if (existing.obligation_status === 'HasObligations' && !isAdmin) {
-      pushToast('error', 'Confirmed references cannot be deleted.');
+      pushToast('error', 'References with prior payments cannot be deleted. Cancel or deactivate instead.');
       return false;
     }
     setLocalRefs((prev) => prev.filter((r) => r.id !== id));
@@ -3086,33 +3528,43 @@ export const AliradaProvider: React.FC<{ children: React.ReactNode }> = ({ child
     return true;
   };
 
-  const cancelPointExchange: AliradaContextValue['cancelPointExchange'] = async (exchangeId) => {
+  const deactivatePointExchange: AliradaContextValue['deactivatePointExchange'] = async (exchangeId) => {
     if (!requireVerifiedAuth()) return false;
     const exc = pointExchanges.find((e) => e.id === exchangeId);
     if (!exc) return false;
     if (exc.status !== 'Escrow Locked') {
-      pushToast('error', 'Only unaccepted Escrow Locked listings can be cancelled.');
+      pushToast(
+        'error',
+        'Only Escrow Locked exchanges without an active cash proof can be deactivated. Proof Submitted exchanges must be fulfilled.'
+      );
       return false;
     }
     if (exc.seller_uid !== currentProfile.universal_id && !isAdmin) {
-      pushToast('error', 'Only the escrow seller or administrator can cancel this listing.');
+      pushToast('error', 'Only the escrow seller or administrator can deactivate this exchange.');
       return false;
     }
     setLocalExchanges((prev) =>
-      prev.map((e) => (e.id === exchangeId ? { ...e, status: 'Cancelled' } : e))
+      prev.map((e) =>
+        e.id === exchangeId ? { ...e, status: 'Deactivated', is_deactivated: true } : e
+      )
     );
     if (isLiveFirestore && firebaseUser && !SEED_IDS.exchanges.has(exchangeId)) {
       try {
         await updateDoc(doc(db, 'point_exchanges', exchangeId), {
-          status: 'Cancelled',
+          status: 'Deactivated',
+          is_deactivated: true,
           updatedAt: serverTimestamp(),
         });
       } catch (err) {
         handleFirestoreError(err, OperationType.UPDATE, `point_exchanges/${exchangeId}`);
       }
     }
-    pushToast('success', `Escrow ${exc.exchange_code} cancelled and points unlocked.`);
+    pushToast('success', `Exchange ${exc.exchange_code} deactivated and escrowed points unlocked.`);
     return true;
+  };
+
+  const cancelPointExchange: AliradaContextValue['cancelPointExchange'] = async (exchangeId) => {
+    return deactivatePointExchange(exchangeId);
   };
 
   // Governance & Reports & Admin
@@ -3189,18 +3641,24 @@ export const AliradaProvider: React.FC<{ children: React.ReactNode }> = ({ child
   const submitUserReport: AliradaContextValue['submitUserReport'] = async (
     targetType,
     targetId,
-    reason
+    reason,
+    options
   ) => {
     if (!requireVerifiedAuth()) return false;
     const id = makeId('rpt');
     const report: UserReport = {
       id,
       report_code: `RPT-${new Date().getFullYear()}-${String(userReports.length + 10)}`,
+      reporter_uid: currentProfile.universal_id,
       reporter_auth_uid: firebaseUser?.uid || currentProfile.uid,
       reporter_email: currentProfile.email || firebaseUser?.email || 'member@alirada.org',
+      reported_uid: options?.reportedUid || '',
       target_type: targetType,
       target_id: targetId,
+      target_snapshot: options?.snapshot?.slice(0, 1500) || '',
       reason: reason.trim(),
+      admin_comment: '',
+      admin_action_taken: '',
       status: 'Open',
       created_at: new Date().toISOString(),
     };
@@ -3209,11 +3667,16 @@ export const AliradaProvider: React.FC<{ children: React.ReactNode }> = ({ child
       try {
         await setDoc(doc(db, 'user_reports', id), {
           report_code: report.report_code,
+          reporter_uid: report.reporter_uid || '',
           reporter_auth_uid: firebaseUser.uid,
           reporter_email: report.reporter_email,
+          reported_uid: report.reported_uid || '',
           target_type: report.target_type,
           target_id: report.target_id,
+          target_snapshot: report.target_snapshot || '',
           reason: report.reason,
+          admin_comment: '',
+          admin_action_taken: '',
           status: 'Open',
           createdAt: serverTimestamp(),
           updatedAt: serverTimestamp(),
@@ -3222,25 +3685,46 @@ export const AliradaProvider: React.FC<{ children: React.ReactNode }> = ({ child
         handleFirestoreError(err, OperationType.CREATE, `user_reports/${id}`);
       }
     }
-    await emitAdminAlert('New User Report', `${report.target_type} (${report.target_id}) reported: ${report.reason}`);
-    pushToast('success', `Report ${report.report_code} submitted for admin review.`);
+    await emitAdminAlert(
+      'New User Report',
+      `${report.reporter_uid || 'Member'} reported ${report.target_type} (${report.target_id}${report.reported_uid ? ` · UID ${report.reported_uid}` : ''}): ${report.reason}`
+    );
+    pushToast('success', `Report ${report.report_code} submitted with examined data for admin review.`);
     return true;
   };
 
-  const resolveUserReport: AliradaContextValue['resolveUserReport'] = async (reportId, status) => {
+  const resolveUserReport: AliradaContextValue['resolveUserReport'] = async (
+    reportId,
+    status,
+    adminComment,
+    actionTaken
+  ) => {
     if (!requireVerifiedAuth() || !isAdmin) return;
-    setLocalReports((prev) => prev.map((r) => (r.id === reportId ? { ...r, status } : r)));
+    setLocalReports((prev) =>
+      prev.map((r) =>
+        r.id === reportId
+          ? {
+              ...r,
+              status,
+              ...(adminComment !== undefined ? { admin_comment: adminComment } : {}),
+              ...(actionTaken !== undefined ? { admin_action_taken: actionTaken } : {}),
+            }
+          : r
+      )
+    );
     if (isLiveFirestore && firebaseUser && isAdmin) {
       try {
         await updateDoc(doc(db, 'user_reports', reportId), {
           status,
+          ...(adminComment !== undefined ? { admin_comment: adminComment.slice(0, 1000) } : {}),
+          ...(actionTaken !== undefined ? { admin_action_taken: actionTaken.slice(0, 160) } : {}),
           updatedAt: serverTimestamp(),
         });
       } catch (err) {
         handleFirestoreError(err, OperationType.UPDATE, `user_reports/${reportId}`);
       }
     }
-    pushToast('success', `Report marked ${status}.`);
+    pushToast('success', `Report updated (${status}).`);
   };
 
   const updateSystemConfig: AliradaContextValue['updateSystemConfig'] = async (patch) => {
@@ -3549,6 +4033,7 @@ export const AliradaProvider: React.FC<{ children: React.ReactNode }> = ({ child
     setLocalEmployment((prev) => prev.filter((x) => !SEED_IDS.jobs.has(x.id)));
     setLocalOrders((prev) => prev.filter((x) => !SEED_IDS.orders.has(x.id)));
     setLocalInvestments((prev) => prev.filter((x) => !SEED_IDS.investments.has(x.id)));
+    setLocalProjectReports((prev) => prev.filter((x) => !SEED_IDS.projectReports.has(x.id)));
     setLocalExchanges((prev) => prev.filter((x) => !SEED_IDS.exchanges.has(x.id)));
     setLocalRefs((prev) => prev.filter((x) => !SEED_IDS.refs.has(x.id)));
     setLocalBatches((prev) => prev.filter((x) => !SEED_IDS.batches.has(x.id)));
@@ -3612,6 +4097,7 @@ export const AliradaProvider: React.FC<{ children: React.ReactNode }> = ({ child
         orders,
         deliveries,
         investments,
+        projectReports,
         pointExchanges,
         transactionRefs,
         batchPayments,
@@ -3629,6 +4115,8 @@ export const AliradaProvider: React.FC<{ children: React.ReactNode }> = ({ child
         setAuthModalOpen,
         reportModalTarget,
         setReportModalTarget,
+        activeCheckoutRefCode,
+        setActiveCheckoutRefCode,
         toasts,
         pushToast,
         dismissToast,
@@ -3644,13 +4132,17 @@ export const AliradaProvider: React.FC<{ children: React.ReactNode }> = ({ child
         logService,
         logRequestedServant,
         castRecognitionVote,
+        replyToRecognition,
         createListing,
         updateListing,
+        deactivateListing,
         deleteListing,
         activateListingForOrders,
         placeOrder,
         confirmOrderDelivery,
-        investInListing,
+        investInProject,
+        updateProjectInvestmentConfig,
+        submitProjectInvestmentReport,
         createProject,
         joinOrRequestProject,
         approveProjectMember,
@@ -3664,6 +4156,7 @@ export const AliradaProvider: React.FC<{ children: React.ReactNode }> = ({ child
         updateJobApplicantStatus,
         issueTransactionRef,
         redeemTransactionRef,
+        deactivateTransactionRef,
         deleteTransactionRef,
         saveBatchPayment,
         sendBatchPayment,
@@ -3671,6 +4164,7 @@ export const AliradaProvider: React.FC<{ children: React.ReactNode }> = ({ child
         createPointExchange,
         submitExchangeProof,
         releasePointExchange,
+        deactivatePointExchange,
         cancelPointExchange,
         saveGovernanceDelegate,
         voteForCeo,

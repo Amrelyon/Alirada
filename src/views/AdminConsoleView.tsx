@@ -1,10 +1,12 @@
-import React, { useEffect, useState } from 'react';
+import React, { useEffect, useMemo, useState } from 'react';
 import {
   Archive,
+  Award,
   Coins,
   Database,
   Gavel,
   HeartHandshake,
+  MessageSquare,
   Settings,
   ShieldAlert,
   ShieldCheck,
@@ -12,6 +14,7 @@ import {
   UserPlus,
 } from 'lucide-react';
 import { ROOT_ADMIN_EMAIL, useAlirada } from '../context/AliradaContext';
+import { computeAllRecognitionFraudAlerts } from '../lib/ledgerMath';
 
 const DELEGATABLE_ADMIN_TASKS = [
   'Economy Settings',
@@ -31,6 +34,7 @@ export const AdminConsoleView: React.FC = () => {
     mockDataCleared,
     mockRecordCount,
     profiles,
+    recognitionVotes,
     userReports,
     systemConfig,
     updateSystemConfig,
@@ -38,6 +42,7 @@ export const AdminConsoleView: React.FC = () => {
     runDailyMicroFeeCycle,
     approveCharityGrant,
     archiveCurrentCycle,
+    submitUserReport,
     resolveUserReport,
     grantAdminDelegation,
     revokeAdminDelegation,
@@ -79,6 +84,14 @@ export const AdminConsoleView: React.FC = () => {
   // 2-step Mock Data Purge confirmation
   const [confirmPurge, setConfirmPurge] = useState(false);
   const [purging, setPurging] = useState(false);
+
+  // Per-report editable admin comment drafts
+  const [reportCommentMap, setReportCommentMap] = useState<Record<string, string>>({});
+
+  const recognitionFraudAlerts = useMemo(
+    () => computeAllRecognitionFraudAlerts(recognitionVotes),
+    [recognitionVotes]
+  );
 
   // Keep local form fields synchronized with Firestore snapshots & profile updates
   useEffect(() => {
@@ -607,37 +620,275 @@ export const AdminConsoleView: React.FC = () => {
         </div>
       </div>
 
+      {/* Recognition Integrity & Similarity Monitor */}
+      <div className="bg-white dark:bg-[#12151B] border border-stone-200 dark:border-stone-800 rounded-xl p-6 space-y-4">
+        <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-2">
+          <div>
+            <h2 className="text-base font-semibold flex items-center gap-2 text-stone-900 dark:text-stone-100">
+              <Award className="w-4 h-4 text-[#B88B1E] dark:text-[#D4AF37]" />
+              Recognition UID Uniqueness & Collusion Monitor ({recognitionFraudAlerts.length})
+            </h2>
+            <p className="text-xs text-stone-500 dark:text-stone-400">
+              Tracks how unique each member&apos;s recognizers are and identifies identical recognizer overlap across UIDs to detect ring fraud.
+            </p>
+          </div>
+        </div>
+
+        {recognitionFraudAlerts.length === 0 ? (
+          <p className="text-xs text-stone-500">No recognition votes recorded yet.</p>
+        ) : (
+          <div className="overflow-x-auto">
+            <table className="w-full text-start text-xs">
+              <thead>
+                <tr className="border-b border-stone-200 dark:border-stone-800 text-stone-500">
+                  <th className="py-2 pe-3 font-medium">Target UID</th>
+                  <th className="py-2 pe-3 font-medium">Uniqueness %</th>
+                  <th className="py-2 pe-3 font-medium">Recognizers</th>
+                  <th className="py-2 pe-3 font-medium">Identical Overlap / Cross-UID Match</th>
+                  <th className="py-2 text-end font-medium">Admin Audit</th>
+                </tr>
+              </thead>
+              <tbody className="divide-y divide-stone-100 dark:divide-stone-800/70">
+                {recognitionFraudAlerts.map((alert) => {
+                  const topMatch = alert.topMatches[0];
+                  return (
+                    <tr key={alert.targetUid}>
+                      <td className="py-2.5 pe-3">
+                        <button
+                          type="button"
+                          onClick={() => setInspectedUid(alert.targetUid)}
+                          className="notranslate font-mono-tabular font-semibold text-[#B88B1E] dark:text-[#D4AF37] hover:underline"
+                        >
+                          {alert.targetUid}
+                        </button>
+                      </td>
+                      <td className="py-2.5 pe-3 font-mono-tabular font-semibold">
+                        <span
+                          className={
+                            alert.uniquenessPct < 50
+                              ? 'text-rose-700 dark:text-rose-400'
+                              : 'text-emerald-700 dark:text-emerald-400'
+                          }
+                        >
+                          {alert.uniquenessPct}%
+                        </span>{' '}
+                        <span className="text-stone-500 font-normal">
+                          ({alert.uniqueExclusiveCount}/{alert.recognizerUids.length})
+                        </span>
+                      </td>
+                      <td className="py-2.5 pe-3 font-mono-tabular text-stone-600 dark:text-stone-300">
+                        {alert.recognizerUids.join(', ')}
+                      </td>
+                      <td className="py-2.5 pe-3 text-stone-600 dark:text-stone-300">
+                        {topMatch ? (
+                          <span>
+                            <span className="font-mono-tabular font-semibold text-amber-700 dark:text-amber-400">
+                              {topMatch.identicalPct}% identical
+                            </span>{' '}
+                            to {topMatch.otherUid} (shared: {topMatch.sharedUids.join(', ')})
+                          </span>
+                        ) : (
+                          'Unique set (0% overlap)'
+                        )}
+                      </td>
+                      <td className="py-2.5 text-end">
+                        <button
+                          type="button"
+                          onClick={() =>
+                            submitUserReport(
+                              'Recognition Fraud',
+                              alert.targetUid,
+                              `Auto-audit flag: ${alert.uniquenessPct}% recognizer uniqueness${
+                                topMatch
+                                  ? `, ${topMatch.identicalPct}% identical to ${topMatch.otherUid} (shared: ${topMatch.sharedUids.join(', ')})`
+                                  : ''
+                              }`,
+                              {
+                                reportedUid: alert.targetUid,
+                                snapshot: `Target ${alert.targetUid} · Recognizers: ${alert.recognizerUids.join(', ')} · Uniqueness: ${alert.uniquenessPct}%`,
+                              }
+                            )
+                          }
+                          className="px-2.5 py-1 rounded border border-amber-400/50 text-amber-700 dark:text-amber-400 hover:bg-amber-500/10"
+                        >
+                          Log Fraud Case
+                        </button>
+                      </td>
+                    </tr>
+                  );
+                })}
+              </tbody>
+            </table>
+          </div>
+        )}
+      </div>
+
       {/* User Reports Queue */}
       <div className="bg-white dark:bg-[#12151B] border border-stone-200 dark:border-stone-800 rounded-xl p-6 space-y-4">
         <h2 className="text-base font-semibold text-stone-900 dark:text-stone-100">
-          User Reports Queue ({userReports.length})
+          User Reports Queue & Examination Desk ({userReports.length})
         </h2>
         {userReports.length === 0 ? (
           <p className="text-xs text-stone-500">No open user reports at this time.</p>
         ) : (
-          <div className="divide-y divide-stone-100 dark:divide-stone-800/70 text-xs">
-            {userReports.map((r) => (
-              <div key={r.id} className="py-3 flex flex-col sm:flex-row sm:items-center justify-between gap-3">
-                <div>
-                  <p className="font-semibold text-stone-900 dark:text-stone-100">
-                    {r.report_code} · {r.target_type} ({r.target_id}) · {r.status}
-                  </p>
-                  <p className="text-stone-600 dark:text-stone-300">{r.reason}</p>
-                </div>
-                <div className="flex items-center gap-2">
-                  {(['Reviewed', 'Actioned', 'Dismissed'] as const).map((st) => (
+          <div className="divide-y divide-stone-200 dark:divide-stone-800 text-xs">
+            {userReports.map((r) => {
+              const targetProfile = profiles.find(
+                (p) =>
+                  p.universal_id.toUpperCase() === (r.reported_uid || r.target_id).toUpperCase()
+              );
+              const commentVal =
+                reportCommentMap[r.id] !== undefined ? reportCommentMap[r.id] : r.admin_comment || '';
+
+              return (
+                <div key={r.id} className="py-4 space-y-3">
+                  <div className="flex flex-col lg:flex-row lg:items-start justify-between gap-3">
+                    <div className="space-y-1.5 flex-1">
+                      <div className="flex items-center gap-2 flex-wrap">
+                        <span className="font-mono-tabular font-bold text-stone-900 dark:text-stone-100">
+                          {r.report_code}
+                        </span>
+                        <span className="text-stone-500">·</span>
+                        <span className="font-semibold text-[#B88B1E] dark:text-[#D4AF37]">
+                          {r.target_type} ({r.target_id})
+                        </span>
+                        <span className="text-stone-500">· Status:</span>
+                        <span className="font-semibold text-stone-900 dark:text-stone-100">
+                          {r.status}
+                        </span>
+                        {r.admin_action_taken && (
+                          <span className="font-mono-tabular text-rose-700 dark:text-rose-400">
+                            · Action: {r.admin_action_taken}
+                          </span>
+                        )}
+                      </div>
+
+                      <p className="text-stone-500 dark:text-stone-400">
+                        Reporter UID:{' '}
+                        {r.reporter_uid ? (
+                          <button
+                            type="button"
+                            onClick={() => setInspectedUid(r.reporter_uid!)}
+                            className="notranslate font-mono-tabular text-[#B88B1E] dark:text-[#D4AF37] hover:underline"
+                          >
+                            {r.reporter_uid}
+                          </button>
+                        ) : (
+                          r.reporter_email
+                        )}{' '}
+                        {r.reported_uid && (
+                          <>
+                            · Reported UID:{' '}
+                            <button
+                              type="button"
+                              onClick={() => setInspectedUid(r.reported_uid!)}
+                              className="notranslate font-mono-tabular text-rose-700 dark:text-rose-400 hover:underline font-semibold"
+                            >
+                              {r.reported_uid}
+                            </button>
+                          </>
+                        )}
+                      </p>
+
+                      <p className="text-stone-800 dark:text-stone-200">{r.reason}</p>
+
+                      {r.target_snapshot && (
+                        <div className="p-2.5 rounded-lg bg-stone-50 dark:bg-[#0B0D10] border border-stone-200 dark:border-stone-800 text-stone-600 dark:text-stone-300">
+                          <span className="font-semibold text-stone-800 dark:text-stone-200">
+                            Examined Snapshot:{' '}
+                          </span>
+                          {r.target_snapshot}
+                        </div>
+                      )}
+
+                      {r.admin_comment && (
+                        <p className="text-[11px] text-emerald-700 dark:text-emerald-400">
+                          Saved Admin Note: {r.admin_comment}
+                        </p>
+                      )}
+                    </div>
+
+                    <div className="flex flex-wrap items-center gap-1.5 shrink-0">
+                      {targetProfile && (
+                        <>
+                          <button
+                            type="button"
+                            onClick={async () => {
+                              await applyAdminDiscipline(
+                                targetProfile.id,
+                                'PENALTY',
+                                25,
+                                `Report ${r.report_code}: ${r.reason}`
+                              );
+                              await resolveUserReport(
+                                r.id,
+                                'Actioned',
+                                commentVal,
+                                'PENALTY (-25 pts)'
+                              );
+                            }}
+                            className="px-2.5 py-1 rounded border border-amber-400/60 text-amber-700 dark:text-amber-400 hover:bg-amber-500/10 font-medium"
+                          >
+                            Penalty 25 pts
+                          </button>
+                          <button
+                            type="button"
+                            onClick={async () => {
+                              await applyAdminDiscipline(
+                                targetProfile.id,
+                                'FREEZE',
+                                0,
+                                `Report ${r.report_code}: ${r.reason}`
+                              );
+                              await resolveUserReport(
+                                r.id,
+                                'Actioned',
+                                commentVal,
+                                'FREEZE Account'
+                              );
+                            }}
+                            className="px-2.5 py-1 rounded border border-rose-400/60 text-rose-700 dark:text-rose-400 hover:bg-rose-500/10 font-medium"
+                          >
+                            Freeze UID
+                          </button>
+                        </>
+                      )}
+                      {(['Reviewed', 'Actioned', 'Dismissed'] as const).map((st) => (
+                        <button
+                          key={st}
+                          type="button"
+                          onClick={() => resolveUserReport(r.id, st, commentVal)}
+                          className="px-2.5 py-1 rounded border border-stone-300 dark:border-stone-700 hover:bg-stone-100 dark:hover:bg-stone-800"
+                        >
+                          {st}
+                        </button>
+                      ))}
+                    </div>
+                  </div>
+
+                  {/* Persistent Admin Investigation Note */}
+                  <div className="flex flex-col sm:flex-row gap-2 pt-1">
+                    <input
+                      type="text"
+                      value={commentVal}
+                      onChange={(e) =>
+                        setReportCommentMap((prev) => ({ ...prev, [r.id]: e.target.value }))
+                      }
+                      placeholder="Add administrator follow-up note for later review..."
+                      className="flex-1 px-3 py-1.5 rounded-lg border border-stone-300 dark:border-stone-700 bg-stone-50 dark:bg-[#0B0D10]"
+                    />
                     <button
-                      key={st}
                       type="button"
-                      onClick={() => resolveUserReport(r.id, st)}
-                      className="px-2.5 py-1 rounded border border-stone-300 dark:border-stone-700 hover:bg-stone-100 dark:hover:bg-stone-800"
+                      onClick={() => resolveUserReport(r.id, r.status, commentVal)}
+                      className="px-3 py-1.5 rounded-lg bg-stone-900 dark:bg-stone-100 text-white dark:text-stone-900 font-medium inline-flex items-center gap-1.5 self-start"
                     >
-                      {st}
+                      <MessageSquare className="w-3.5 h-3.5" />
+                      Save Comment
                     </button>
-                  ))}
+                  </div>
                 </div>
-              </div>
-            ))}
+              );
+            })}
           </div>
         )}
       </div>

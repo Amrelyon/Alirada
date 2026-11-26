@@ -23,6 +23,7 @@ import { GoogleTranslateControl } from './components/GoogleTranslateControl';
 import { UserAvatar } from './components/UserAvatar';
 import { UserInspectorModal } from './components/UserInspectorModal';
 import { AuthModal } from './components/AuthModal';
+import { EmbeddedC2PCheckoutModal } from './components/EmbeddedC2PCheckoutModal';
 import { ReportDialog } from './components/ReportDialog';
 import { HomeOverviewView } from './views/HomeOverviewView';
 import { ServiceLedgerView } from './views/ServiceLedgerView';
@@ -353,6 +354,7 @@ const AliradaWorkspace: React.FC = () => {
       {/* Global Modals */}
       <UserInspectorModal />
       <AuthModal />
+      <EmbeddedC2PCheckoutModal />
       <ReportDialog />
     </div>
   );

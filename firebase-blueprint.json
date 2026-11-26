@@ -99,6 +99,8 @@
         "recognizer_auth_uid": { "type": "string", "maxLength": 128 },
         "direction": { "type": "string", "enum": ["UPWARD", "COMPENSATE"] },
         "comment": { "type": "string", "maxLength": 500 },
+        "reply": { "type": "string", "maxLength": 500 },
+        "replied_at": { "type": "string", "maxLength": 64 },
         "created_at": { "type": "string", "maxLength": 64 }
       },
       "required": ["target_uid", "recognizer_uid", "recognizer_auth_uid", "direction", "comment", "created_at"]
@@ -128,8 +130,10 @@
         "investment_goal_points": { "type": "number" },
         "budget_doc_url": { "type": "string", "maxLength": 512 },
         "presentation_url": { "type": "string", "maxLength": 512 },
+        "linked_project_id": { "type": "string", "maxLength": 128 },
         "entity_type": { "type": "string", "maxLength": 64 },
-        "availability_status": { "type": "string", "enum": ["Funding", "Active"] },
+        "availability_status": { "type": "string", "enum": ["Funding", "Active", "Deactivated"] },
+        "is_deactivated": { "type": "boolean" },
         "obligation_status": { "type": "string", "enum": ["None", "HasObligations"] },
         "created_at": { "type": "string", "maxLength": 64 }
       },
@@ -137,7 +141,7 @@
     },
     "Project": {
       "title": "Project",
-      "description": "Cooperative project workspace with members, delegates, and elected CEO.",
+      "description": "Cooperative project workspace with members, delegates, elected CEO, and investment funding.",
       "type": "object",
       "properties": {
         "project_code": { "type": "string", "maxLength": 40 },
@@ -155,6 +159,10 @@
         "video_url": { "type": "string", "maxLength": 512 },
         "evidence_link": { "type": "string", "maxLength": 512 },
         "entity_type": { "type": "string", "maxLength": 64 },
+        "investment_goal_points": { "type": "number" },
+        "budget_doc_url": { "type": "string", "maxLength": 512 },
+        "presentation_url": { "type": "string", "maxLength": 512 },
+        "investment_status": { "type": "string", "enum": ["Open", "Deactivated", "Closed"] },
         "delegates": { "type": "array" },
         "members": { "type": "array" },
         "join_requests": { "type": "array" },
@@ -162,6 +170,27 @@
         "created_at": { "type": "string", "maxLength": 64 }
       },
       "required": ["project_code", "owner_uid", "owner_auth_uid", "name", "visibility", "obligation_status", "created_at"]
+    },
+    "ProjectInvestmentReport": {
+      "title": "ProjectInvestmentReport",
+      "description": "Shareholder financial and progress report tracking multi-link updates, period cost, period income, and cumulative totals.",
+      "type": "object",
+      "properties": {
+        "report_code": { "type": "string", "maxLength": 40 },
+        "project_id": { "type": "string", "maxLength": 128 },
+        "project_code": { "type": "string", "maxLength": 40 },
+        "author_uid": { "type": "string", "maxLength": 32 },
+        "author_auth_uid": { "type": "string", "maxLength": 128 },
+        "title": { "type": "string", "maxLength": 160 },
+        "summary_text": { "type": "string", "maxLength": 2000 },
+        "links": { "type": "array" },
+        "period_cost_points": { "type": "number" },
+        "period_income_points": { "type": "number" },
+        "total_accumulated_cost": { "type": "number" },
+        "total_accumulated_income": { "type": "number" },
+        "created_at": { "type": "string", "maxLength": 64 }
+      },
+      "required": ["report_code", "project_id", "project_code", "author_uid", "author_auth_uid", "title", "summary_text", "links", "period_cost_points", "period_income_points", "total_accumulated_cost", "total_accumulated_income", "created_at"]
     },
     "ProjectHierarchyItem": {
       "title": "ProjectHierarchyItem",
@@ -237,6 +266,8 @@
         "order_status": { "type": "string", "enum": ["Pending", "Confirmed", "Completed", "Rejected"] },
         "delivery_status": { "type": "string", "enum": ["Awaiting", "Delivered", "Partially Delivered", "Rejected"] },
         "rejection_reason": { "type": "string", "maxLength": 500 },
+        "c2p_ref_code": { "type": "string", "maxLength": 64 },
+        "c2p_payment_link": { "type": "string", "maxLength": 512 },
         "trigger_type": { "type": "string", "maxLength": 64 },
         "trigger_payload": { "type": "string", "maxLength": 512 },
         "obligation_status": { "type": "string", "enum": ["None", "HasObligations"] },
@@ -271,6 +302,8 @@
         "investment_code": { "type": "string", "maxLength": 40 },
         "investor_uid": { "type": "string", "maxLength": 32 },
         "investor_auth_uid": { "type": "string", "maxLength": 128 },
+        "project_id": { "type": "string", "maxLength": 128 },
+        "project_code": { "type": "string", "maxLength": 40 },
         "listing_id": { "type": "string", "maxLength": 128 },
         "listing_code": { "type": "string", "maxLength": 40 },
         "target_type": { "type": "string", "maxLength": 48 },
@@ -298,7 +331,8 @@
         "points_requested": { "type": "number" },
         "cash_amount": { "type": "number" },
         "currency": { "type": "string", "maxLength": 12 },
-        "status": { "type": "string", "enum": ["Open", "Escrow Locked", "Proof Submitted", "Released", "Cancelled"] },
+        "status": { "type": "string", "enum": ["Open", "Escrow Locked", "Proof Submitted", "Released", "Deactivated", "Cancelled"] },
+        "is_deactivated": { "type": "boolean" },
         "payment_proof": { "type": "string", "maxLength": 512 },
         "notes": { "type": "string", "maxLength": 500 },
         "obligation_status": { "type": "string", "enum": ["None", "HasObligations"] },
@@ -308,7 +342,7 @@
     },
     "TransactionRef": {
       "title": "TransactionRef",
-      "description": "C2P or P2P payment reference code with widget metadata and post-payment trigger.",
+      "description": "C2P or P2P payment reference code with widget metadata, multi-payer settlement log, and post-payment trigger.",
       "type": "object",
       "properties": {
         "ref_code": { "type": "string", "maxLength": 64 },
@@ -317,7 +351,9 @@
         "issuer_auth_uid": { "type": "string", "maxLength": 128 },
         "counterparty_uid": { "type": "string", "maxLength": 32 },
         "counterparty_auth_uid": { "type": "string", "maxLength": 128 },
+        "participant_auth_uids": { "type": "array" },
         "linked_listing_code": { "type": "string", "maxLength": 40 },
+        "linked_order_id": { "type": "string", "maxLength": 128 },
         "widget_name": { "type": "string", "maxLength": 120 },
         "points_amount": { "type": "number" },
         "payment_model": { "type": "string", "maxLength": 48 },
@@ -325,7 +361,11 @@
         "description": { "type": "string", "maxLength": 500 },
         "trigger_type": { "type": "string", "enum": ["None", "Redirect URL", "Webhook/Notification", "Access Grant", "Order Creation", "Manual Verification Request"] },
         "trigger_payload": { "type": "string", "maxLength": 512 },
-        "status": { "type": "string", "enum": ["Pending", "Confirmed", "Cancelled"] },
+        "status": { "type": "string", "enum": ["Open", "Pending", "Confirmed", "Deactivated", "Cancelled"] },
+        "is_deactivated": { "type": "boolean" },
+        "payments_count": { "type": "integer" },
+        "last_paid_by_uid": { "type": "string", "maxLength": 32 },
+        "c2p_settlements": { "type": "array" },
         "payer_email": { "type": "string", "maxLength": 180 },
         "confirmed_at": { "type": "string", "maxLength": 64 },
         "obligation_status": { "type": "string", "enum": ["None", "HasObligations"] },
@@ -379,11 +419,16 @@
       "type": "object",
       "properties": {
         "report_code": { "type": "string", "maxLength": 40 },
+        "reporter_uid": { "type": "string", "maxLength": 32 },
         "reporter_auth_uid": { "type": "string", "maxLength": 128 },
         "reporter_email": { "type": "string", "maxLength": 180 },
-        "target_type": { "type": "string", "enum": ["User", "Profile Image", "Service Log", "Listing", "Order"] },
+        "reported_uid": { "type": "string", "maxLength": 32 },
+        "target_type": { "type": "string", "enum": ["User", "Profile Image", "Service Log", "Listing", "Order", "Recognition Fraud"] },
         "target_id": { "type": "string", "maxLength": 128 },
+        "target_snapshot": { "type": "string", "maxLength": 1600 },
         "reason": { "type": "string", "maxLength": 1000 },
+        "admin_comment": { "type": "string", "maxLength": 1000 },
+        "admin_action_taken": { "type": "string", "maxLength": 200 },
         "status": { "type": "string", "enum": ["Open", "Reviewed", "Actioned", "Dismissed"] },
         "created_at": { "type": "string", "maxLength": 64 }
       },
@@ -480,7 +525,11 @@
     },
     "/investments/{investmentId}": {
       "schema": { "$ref": "#/entities/Investment" },
-      "description": "Crowdfunding investments."
+      "description": "Crowdfunding project investments."
+    },
+    "/project_investment_reports/{reportId}": {
+      "schema": { "$ref": "#/entities/ProjectInvestmentReport" },
+      "description": "Project investment financial & progress shareholder reports."
     },
     "/point_exchanges/{exchangeId}": {
       "schema": { "$ref": "#/entities/PointExchange" },

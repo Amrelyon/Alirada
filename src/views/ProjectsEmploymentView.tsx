@@ -2,26 +2,43 @@ import React, { useEffect, useMemo, useState } from 'react';
 import {
   Briefcase,
   CheckCircle2,
+  Coins,
   ExternalLink,
+  FileSpreadsheet,
   FolderKanban,
+  Link2,
   Plus,
+  Send,
+  Settings,
   ThumbsDown,
   ThumbsUp,
+  Trash2,
+  TrendingUp,
   UserPlus,
   X,
 } from 'lucide-react';
 import { useAlirada } from '../context/AliradaContext';
-import { ProjectHierarchyItem } from '../types/alirada';
+import { ProjectHierarchyItem, ProjectInvestmentReportLink } from '../types/alirada';
 import { UserAvatar } from '../components/UserAvatar';
+import { InvestmentAnalyticsChart } from '../components/InvestmentAnalyticsChart';
+import {
+  buildPlatformInvestmentSeries,
+  buildProjectChartSeries,
+  computeProjectInvestmentMetrics,
+} from '../lib/ledgerMath';
 
 export const ProjectsEmploymentView: React.FC = () => {
   const {
     currentProfile,
+    isAdmin,
     profiles,
     projects,
     hierarchyItems,
     employmentPostings,
     listings,
+    orders,
+    investments,
+    projectReports,
     systemConfig,
     createProject,
     joinOrRequestProject,
@@ -30,6 +47,9 @@ export const ProjectsEmploymentView: React.FC = () => {
     voteHierarchyItem,
     assignHierarchyUids,
     submitExecutionReport,
+    investInProject,
+    updateProjectInvestmentConfig,
+    submitProjectInvestmentReport,
     createJobPosting,
     applyToJob,
     inviteToJob,
@@ -48,7 +68,8 @@ export const ProjectsEmploymentView: React.FC = () => {
       setSelectedProjectId(projects[0].id);
     }
   }, [projects, selectedProjectId]);
-  const [subTab, setSubTab] = useState<'hierarchy' | 'jobs'>('hierarchy');
+  const [subTab, setSubTab] = useState<'hierarchy' | 'investments' | 'jobs'>('hierarchy');
+  const [showPlatformDiagram, setShowPlatformDiagram] = useState(true);
   const [createProjectOpen, setCreateProjectOpen] = useState(false);
 
   // Create Project Form
@@ -57,6 +78,27 @@ export const ProjectsEmploymentView: React.FC = () => {
   const [pDesc, setPDesc] = useState('');
   const [pVis, setPVis] = useState<'Public' | 'Private'>('Public');
   const [pLoc, setPLoc] = useState('');
+  const [pGoal, setPGoal] = useState(0);
+  const [pBudgetDoc, setPBudgetDoc] = useState('');
+  const [pPresUrl, setPPresUrl] = useState('');
+
+  // Project Investment & Shareholder Report Modals
+  const [investModalOpen, setInvestModalOpen] = useState(false);
+  const [investAmount, setInvestAmount] = useState(100);
+  const [configModalOpen, setConfigModalOpen] = useState(false);
+  const [cfgGoal, setCfgGoal] = useState(0);
+  const [cfgBudgetDoc, setCfgBudgetDoc] = useState('');
+  const [cfgPresUrl, setCfgPresUrl] = useState('');
+  const [cfgStatus, setCfgStatus] = useState<'Open' | 'Deactivated' | 'Closed'>('Open');
+
+  const [reportDialogOpen, setReportDialogOpen] = useState(false);
+  const [repTitle, setRepTitle] = useState('');
+  const [repSummary, setRepSummary] = useState('');
+  const [repCost, setRepCost] = useState(0);
+  const [repIncome, setRepIncome] = useState(0);
+  const [repLinks, setRepLinks] = useState<ProjectInvestmentReportLink[]>([
+    { label: 'Milestone Evidence / Sheet', url: '' },
+  ]);
 
   // Quick Add Hierarchy Modal
   const [addHierarchyModal, setAddHierarchyModal] = useState<{
@@ -95,20 +137,101 @@ export const ProjectsEmploymentView: React.FC = () => {
     [hierarchyItems, activeProject]
   );
 
-  // Group into Function -> Steps -> Fixes
+  // Strict nesting: Function -> Step -> Multiple Fixes[]
   const groupedHierarchy = useMemo(() => {
-    const fnMap = new Map<string, ProjectHierarchyItem[]>();
+    const fnMap = new Map<
+      string,
+      {
+        fnRoots: ProjectHierarchyItem[];
+        steps: {
+          stepTitle: string;
+          stepItem?: ProjectHierarchyItem;
+          fixes: ProjectHierarchyItem[];
+        }[];
+      }
+    >();
+
     projectItems.forEach((item) => {
-      const list = fnMap.get(item.function_name) || [];
-      list.push(item);
-      fnMap.set(item.function_name, list);
+      if (!fnMap.has(item.function_name)) {
+        fnMap.set(item.function_name, { fnRoots: [], steps: [] });
+      }
+      const group = fnMap.get(item.function_name)!;
+      if (!item.step_title) {
+        group.fnRoots.push(item);
+        return;
+      }
+      let stepGroup = group.steps.find((s) => s.stepTitle === item.step_title);
+      if (!stepGroup) {
+        stepGroup = { stepTitle: item.step_title, fixes: [] };
+        group.steps.push(stepGroup);
+      }
+      if (item.fix_title) {
+        stepGroup.fixes.push(item);
+      } else {
+        stepGroup.stepItem = item;
+      }
     });
+
     return Array.from(fnMap.entries());
   }, [projectItems]);
 
   const projectJobs = useMemo(
     () => employmentPostings.filter((j) => j.project_id === activeProject?.id),
     [employmentPostings, activeProject]
+  );
+
+  const platformAnalytics = useMemo(
+    () => buildPlatformInvestmentSeries(investments, projectReports, orders, listings),
+    [investments, projectReports, orders, listings]
+  );
+
+  const activeInvMetrics = useMemo(() => {
+    if (!activeProject) return null;
+    return computeProjectInvestmentMetrics(
+      activeProject.id,
+      listings,
+      orders,
+      investments,
+      projectReports
+    );
+  }, [activeProject, listings, orders, investments, projectReports]);
+
+  const activeChartSeries = useMemo(() => {
+    if (!activeProject) return [];
+    return buildProjectChartSeries(
+      activeProject.id,
+      activeProject.created_at,
+      listings,
+      orders,
+      investments,
+      projectReports
+    );
+  }, [activeProject, listings, orders, investments, projectReports]);
+
+  const activeProjectReports = useMemo(
+    () =>
+      activeProject
+        ? projectReports
+            .filter((r) => r.project_id === activeProject.id)
+            .sort((a, b) => b.created_at.localeCompare(a.created_at))
+        : [],
+    [projectReports, activeProject]
+  );
+
+  const activeProjectInvestments = useMemo(
+    () =>
+      activeProject
+        ? investments.filter(
+            (i) => i.project_id === activeProject.id || i.listing_id === activeProject.id
+          )
+        : [],
+    [investments, activeProject]
+  );
+
+  const linkedListings = useMemo(
+    () =>
+      activeProject ? listings.filter((l) => l.linked_project_id === activeProject.id) : [],
+    [listings, activeProject]
   );
 
   const courseListings = useMemo(
@@ -130,11 +253,69 @@ export const ProjectsEmploymentView: React.FC = () => {
       description: pDesc,
       visibility: pVis,
       location: pLoc,
+      investment_goal_points: Number(pGoal) || undefined,
+      budget_doc_url: pBudgetDoc || undefined,
+      presentation_url: pPresUrl || undefined,
     });
     if (ok) {
       setCreateProjectOpen(false);
       setPName('');
       setPDesc('');
+      setPGoal(0);
+      setPBudgetDoc('');
+      setPPresUrl('');
+    }
+  };
+
+  const openConfigModal = () => {
+    if (!activeProject) return;
+    setCfgGoal(activeProject.investment_goal_points || 0);
+    setCfgBudgetDoc(activeProject.budget_doc_url || '');
+    setCfgPresUrl(activeProject.presentation_url || '');
+    setCfgStatus(activeProject.investment_status || 'Open');
+    setConfigModalOpen(true);
+  };
+
+  const handleSaveInvConfig = async (e: React.FormEvent) => {
+    e.preventDefault();
+    if (!activeProject) return;
+    const ok = await updateProjectInvestmentConfig(activeProject.id, {
+      investment_goal_points: Number(cfgGoal),
+      budget_doc_url: cfgBudgetDoc,
+      presentation_url: cfgPresUrl,
+      investment_status: cfgStatus,
+    });
+    if (ok) setConfigModalOpen(false);
+  };
+
+  const handleInvestSubmit = async (e: React.FormEvent) => {
+    e.preventDefault();
+    if (!activeProject) return;
+    const ok = await investInProject(activeProject, Number(investAmount));
+    if (ok) {
+      setInvestModalOpen(false);
+      setInvestAmount(100);
+    }
+  };
+
+  const handleReportSubmit = async (e: React.FormEvent) => {
+    e.preventDefault();
+    if (!activeProject) return;
+    const ok = await submitProjectInvestmentReport({
+      project: activeProject,
+      title: repTitle,
+      summary_text: repSummary,
+      links: repLinks,
+      period_cost_points: Number(repCost),
+      period_income_points: Number(repIncome),
+    });
+    if (ok) {
+      setReportDialogOpen(false);
+      setRepTitle('');
+      setRepSummary('');
+      setRepCost(0);
+      setRepIncome(0);
+      setRepLinks([{ label: 'Milestone Evidence / Sheet', url: '' }]);
     }
   };
 
@@ -224,28 +405,78 @@ export const ProjectsEmploymentView: React.FC = () => {
       <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-4">
         <div>
           <h1 className="font-cinzel text-2xl font-bold text-stone-900 dark:text-stone-100">
-            Projects & Employment Workspace
+            Projects, Investments & Employment
           </h1>
           <p className="text-xs text-stone-500 dark:text-stone-400">
-            Nested hierarchy: Project → Function → Step → Fix · Execution reports credit the Service Ledger
+            Function → Step → Multiple Fixes · Project shareholder rounds, reports & linked product income
           </p>
         </div>
 
-        <button
-          type="button"
-          onClick={() => setCreateProjectOpen(true)}
-          className="px-4 py-2 text-xs font-semibold rounded-lg bg-[#B88B1E] dark:bg-[#D4AF37] text-white dark:text-stone-950 hover:opacity-90 inline-flex items-center gap-1.5 self-start whitespace-nowrap"
-        >
-          <Plus className="w-4 h-4" />
-          New Project
-        </button>
+        <div className="flex items-center gap-2 flex-wrap">
+          <button
+            type="button"
+            onClick={() => setShowPlatformDiagram((v) => !v)}
+            className="px-3 py-2 text-xs font-medium rounded-lg border border-stone-300 dark:border-stone-700 hover:bg-stone-100 dark:hover:bg-stone-800 inline-flex items-center gap-1.5 whitespace-nowrap"
+          >
+            <TrendingUp className="w-3.5 h-3.5 text-[#B88B1E] dark:text-[#D4AF37]" />
+            {showPlatformDiagram ? 'Hide Platform Diagram' : 'Show Platform Diagram'}
+          </button>
+          <button
+            type="button"
+            onClick={() => setCreateProjectOpen(true)}
+            className="px-4 py-2 text-xs font-semibold rounded-lg bg-[#B88B1E] dark:bg-[#D4AF37] text-white dark:text-stone-950 hover:opacity-90 inline-flex items-center gap-1.5 self-start whitespace-nowrap"
+          >
+            <Plus className="w-4 h-4" />
+            New Project
+          </button>
+        </div>
       </div>
+
+      {/* Platform-Wide Accumulated Investment & Income Diagram */}
+      {showPlatformDiagram && (
+        <div className="space-y-3">
+          <div className="grid grid-cols-2 lg:grid-cols-4 gap-3">
+            <div className="bg-white dark:bg-[#12151B] border border-stone-200 dark:border-stone-800 rounded-xl p-4">
+              <p className="text-xs text-stone-500 dark:text-stone-400">Platform Invested Capital</p>
+              <p className="text-xl font-mono-tabular font-bold text-[#B88B1E] dark:text-[#D4AF37]">
+                {platformAnalytics.totalInvested} pts
+              </p>
+            </div>
+            <div className="bg-white dark:bg-[#12151B] border border-stone-200 dark:border-stone-800 rounded-xl p-4">
+              <p className="text-xs text-stone-500 dark:text-stone-400">Total Accumulated Income</p>
+              <p className="text-xl font-mono-tabular font-bold text-emerald-700 dark:text-emerald-400">
+                {platformAnalytics.totalIncome} pts
+              </p>
+            </div>
+            <div className="bg-white dark:bg-[#12151B] border border-stone-200 dark:border-stone-800 rounded-xl p-4">
+              <p className="text-xs text-stone-500 dark:text-stone-400">Total Accumulated Cost</p>
+              <p className="text-xl font-mono-tabular font-bold text-rose-700 dark:text-rose-400">
+                {platformAnalytics.totalCost} pts
+              </p>
+            </div>
+            <div className="bg-white dark:bg-[#12151B] border border-stone-200 dark:border-stone-800 rounded-xl p-4">
+              <p className="text-xs text-stone-500 dark:text-stone-400">Real-Time Listing Income</p>
+              <p className="text-xl font-mono-tabular font-bold text-stone-900 dark:text-stone-100">
+                {platformAnalytics.realTimeListingIncome} pts
+              </p>
+            </div>
+          </div>
+
+          <InvestmentAnalyticsChart
+            points={platformAnalytics.points}
+            title="General Platform Investment & Income Diagram"
+            subtitle="All accumulated investments, reported costs, shareholder reports, and real-time linked listing income across Alirada"
+            showInvested
+          />
+        </div>
+      )}
 
       {/* Project Selector Strip */}
       <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
         {projects.map((prj) => {
           const isSelected = activeProject?.id === prj.id;
           const isMember = prj.members.includes(currentProfile.universal_id);
+          const m = computeProjectInvestmentMetrics(prj.id, listings, orders, investments, projectReports);
           return (
             <div
               key={prj.id}
@@ -262,6 +493,11 @@ export const ProjectsEmploymentView: React.FC = () => {
               </div>
               <h3 className="text-sm font-semibold text-stone-900 dark:text-stone-100">{prj.name}</h3>
               <p className="text-xs text-stone-600 dark:text-stone-300 line-clamp-2">{prj.description}</p>
+              {(prj.investment_goal_points || 0) > 0 && (
+                <p className="text-[11px] font-mono-tabular text-emerald-700 dark:text-emerald-400">
+                  Invested: {m.totalInvested} / {prj.investment_goal_points} pts · Income: {m.totalAccumulatedIncome} pts
+                </p>
+              )}
               <div className="flex items-center justify-between pt-2">
                 <span className="text-[11px] text-stone-500">
                   CEO:{' '}
@@ -344,6 +580,17 @@ export const ProjectsEmploymentView: React.FC = () => {
                 </button>
                 <button
                   type="button"
+                  onClick={() => setSubTab('investments')}
+                  className={`px-3 py-1.5 text-xs font-medium rounded-md transition-colors whitespace-nowrap ${
+                    subTab === 'investments'
+                      ? 'bg-white dark:bg-[#1D222C] text-stone-900 dark:text-stone-100 shadow-sm'
+                      : 'text-stone-500 dark:text-stone-400'
+                  }`}
+                >
+                  Investments & Reports ({activeProjectReports.length})
+                </button>
+                <button
+                  type="button"
                   onClick={() => setSubTab('jobs')}
                   className={`px-3 py-1.5 text-xs font-medium rounded-md transition-colors whitespace-nowrap ${
                     subTab === 'jobs'
@@ -381,9 +628,9 @@ export const ProjectsEmploymentView: React.FC = () => {
 
           {subTab === 'hierarchy' && (
             <div className="space-y-5">
-              <div className="flex justify-between items-center">
+              <div className="flex justify-between items-center flex-wrap gap-3">
                 <p className="text-xs text-stone-500 dark:text-stone-400">
-                  Vote Agree / Disagree on proposed work, assign UIDs, and submit execution logs directly to the Service Ledger.
+                  Vote Agree / Disagree on proposed work, add multiple Fixes under any Step, assign UIDs, and submit execution logs directly to the Service Ledger.
                 </p>
                 <button
                   type="button"
@@ -402,10 +649,10 @@ export const ProjectsEmploymentView: React.FC = () => {
                 </p>
               ) : (
                 <div className="space-y-6">
-                  {groupedHierarchy.map(([fnName, items]) => (
+                  {groupedHierarchy.map(([fnName, group]) => (
                     <div
                       key={fnName}
-                      className="border border-stone-200 dark:border-stone-800 rounded-xl p-4 space-y-3"
+                      className="border border-stone-200 dark:border-stone-800 rounded-xl p-4 space-y-4"
                     >
                       <div className="flex items-center justify-between gap-2 flex-wrap border-b border-stone-200 dark:border-stone-800 pb-2">
                         <h3 className="text-sm font-semibold text-stone-900 dark:text-stone-100">
@@ -422,87 +669,214 @@ export const ProjectsEmploymentView: React.FC = () => {
                         </button>
                       </div>
 
-                      <div className="divide-y divide-stone-100 dark:divide-stone-800/70">
-                        {items.map((item) => {
-                          const agreeCount = Object.values(item.votes).filter((v) => v === 'Agree').length;
-                          const disagreeCount = Object.values(item.votes).filter((v) => v === 'Disagree').length;
+                      {/* Function-level root items (if any) */}
+                      {group.fnRoots.map((item) => {
+                        const agreeCount = Object.values(item.votes).filter((v) => v === 'Agree').length;
+                        const disagreeCount = Object.values(item.votes).filter((v) => v === 'Disagree').length;
+                        return (
+                          <div key={item.id} className="py-2 border-b border-stone-100 dark:border-stone-800/70 space-y-2">
+                            <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-2">
+                              <div>
+                                <p className="text-xs text-stone-500 font-mono-tabular">
+                                  {item.task_code} · Function Root · {item.approval_status} · {item.execution_status}
+                                </p>
+                                {item.description && (
+                                  <p className="text-xs text-stone-600 dark:text-stone-300 mt-0.5">{item.description}</p>
+                                )}
+                              </div>
+                              <div className="flex items-center gap-2 flex-wrap shrink-0">
+                                <button
+                                  type="button"
+                                  onClick={() => voteHierarchyItem(item.id, 'Agree')}
+                                  className="px-2.5 py-1 text-xs rounded-md border border-stone-300 dark:border-stone-700 hover:border-emerald-500 inline-flex items-center gap-1 font-mono-tabular"
+                                >
+                                  <ThumbsUp className="w-3 h-3 text-emerald-600" /> {agreeCount}
+                                </button>
+                                <button
+                                  type="button"
+                                  onClick={() => voteHierarchyItem(item.id, 'Disagree')}
+                                  className="px-2.5 py-1 text-xs rounded-md border border-stone-300 dark:border-stone-700 hover:border-rose-500 inline-flex items-center gap-1 font-mono-tabular"
+                                >
+                                  <ThumbsDown className="w-3 h-3 text-rose-600" /> {disagreeCount}
+                                </button>
+                              </div>
+                            </div>
+                          </div>
+                        );
+                      })}
+
+                      {/* Steps & Nested Multiple Fixes */}
+                      <div className="space-y-4">
+                        {group.steps.map((stepGroup) => {
+                          const stepItem = stepGroup.stepItem;
+                          const stepAgree = stepItem
+                            ? Object.values(stepItem.votes).filter((v) => v === 'Agree').length
+                            : 0;
+                          const stepDisagree = stepItem
+                            ? Object.values(stepItem.votes).filter((v) => v === 'Disagree').length
+                            : 0;
                           return (
-                            <div key={item.id} className="py-3 space-y-2">
+                            <div
+                              key={stepGroup.stepTitle}
+                              className="rounded-lg bg-stone-50 dark:bg-[#0B0D10] border border-stone-200 dark:border-stone-800 p-3.5 space-y-3"
+                            >
                               <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-2">
                                 <div className="space-y-0.5">
-                                  <p className="text-xs text-stone-500 dark:text-stone-400 font-mono-tabular">
-                                    {item.task_code} · {item.approval_status} · {item.execution_status}
-                                    {item.estimated_cost ? ` · Est. ${item.estimated_cost} pts` : ''}
+                                  {stepItem && (
+                                    <p className="text-xs text-stone-500 dark:text-stone-400 font-mono-tabular">
+                                      {stepItem.task_code} · {stepItem.approval_status} · {stepItem.execution_status}
+                                      {stepItem.estimated_cost ? ` · Est. ${stepItem.estimated_cost} pts` : ''}
+                                    </p>
+                                  )}
+                                  <p className="text-sm font-semibold text-stone-900 dark:text-stone-100">
+                                    Step: {stepGroup.stepTitle}
+                                    <span className="ms-2 text-xs font-normal text-stone-500">
+                                      ({stepGroup.fixes.length} {stepGroup.fixes.length === 1 ? 'Fix' : 'Fixes'})
+                                    </span>
                                   </p>
-                                  <p className="text-sm font-medium text-stone-900 dark:text-stone-100">
-                                    {item.step_title ? `Step: ${item.step_title}` : 'Function Root'}
-                                    {item.fix_title ? ` → Fix: ${item.fix_title}` : ''}
-                                  </p>
-                                  {item.description && (
+                                  {stepItem?.description && (
                                     <p className="text-xs text-stone-600 dark:text-stone-300">
-                                      {item.description}
+                                      {stepItem.description}
                                     </p>
                                   )}
                                 </div>
 
                                 <div className="flex items-center gap-2 flex-wrap shrink-0">
-                                  {item.step_title && !item.fix_title && (
-                                    <button
-                                      type="button"
-                                      onClick={() =>
-                                        setAddHierarchyModal({
-                                          level: 'Fix',
-                                          functionName: fnName,
-                                          stepTitle: item.step_title,
-                                        })
-                                      }
-                                      className="px-2.5 py-1 text-xs rounded-md border border-stone-300 dark:border-stone-700 hover:bg-stone-100 dark:hover:bg-stone-800"
-                                    >
-                                      + Fix
-                                    </button>
+                                  <button
+                                    type="button"
+                                    onClick={() =>
+                                      setAddHierarchyModal({
+                                        level: 'Fix',
+                                        functionName: fnName,
+                                        stepTitle: stepGroup.stepTitle,
+                                      })
+                                    }
+                                    className="px-2.5 py-1 text-xs font-medium rounded-md border border-[#B88B1E]/50 dark:border-[#D4AF37]/50 text-[#B88B1E] dark:text-[#D4AF37] hover:bg-[#B88B1E]/10"
+                                  >
+                                    + Add Fix
+                                  </button>
+                                  {stepItem && (
+                                    <>
+                                      <button
+                                        type="button"
+                                        onClick={() => voteHierarchyItem(stepItem.id, 'Agree')}
+                                        className="px-2.5 py-1 text-xs rounded-md border border-stone-300 dark:border-stone-700 hover:border-emerald-500 inline-flex items-center gap-1 font-mono-tabular"
+                                      >
+                                        <ThumbsUp className="w-3 h-3 text-emerald-600" /> {stepAgree}
+                                      </button>
+                                      <button
+                                        type="button"
+                                        onClick={() => voteHierarchyItem(stepItem.id, 'Disagree')}
+                                        className="px-2.5 py-1 text-xs rounded-md border border-stone-300 dark:border-stone-700 hover:border-rose-500 inline-flex items-center gap-1 font-mono-tabular"
+                                      >
+                                        <ThumbsDown className="w-3 h-3 text-rose-600" /> {stepDisagree}
+                                      </button>
+                                      {isLeader && (
+                                        <button
+                                          type="button"
+                                          onClick={() => {
+                                            setAssignModalItem(stepItem);
+                                            setAssignRaw(stepItem.assigned_uids.join(', '));
+                                          }}
+                                          className="px-2.5 py-1 text-xs rounded-md border border-stone-300 dark:border-stone-700"
+                                        >
+                                          Assign
+                                        </button>
+                                      )}
+                                      <button
+                                        type="button"
+                                        onClick={() => setExecModalItem(stepItem)}
+                                        className="px-2.5 py-1 text-xs font-medium rounded-md bg-[#B88B1E] dark:bg-[#D4AF37] text-white dark:text-stone-950 inline-flex items-center gap-1"
+                                      >
+                                        <CheckCircle2 className="w-3 h-3" /> Log Execution
+                                      </button>
+                                    </>
                                   )}
-                                  <button
-                                    type="button"
-                                    onClick={() => voteHierarchyItem(item.id, 'Agree')}
-                                    className="px-2.5 py-1 text-xs rounded-md border border-stone-300 dark:border-stone-700 hover:border-emerald-500 inline-flex items-center gap-1 font-mono-tabular"
-                                  >
-                                    <ThumbsUp className="w-3 h-3 text-emerald-600" /> {agreeCount}
-                                  </button>
-                                  <button
-                                    type="button"
-                                    onClick={() => voteHierarchyItem(item.id, 'Disagree')}
-                                    className="px-2.5 py-1 text-xs rounded-md border border-stone-300 dark:border-stone-700 hover:border-rose-500 inline-flex items-center gap-1 font-mono-tabular"
-                                  >
-                                    <ThumbsDown className="w-3 h-3 text-rose-600" /> {disagreeCount}
-                                  </button>
-                                  {isLeader && (
-                                    <button
-                                      type="button"
-                                      onClick={() => {
-                                        setAssignModalItem(item);
-                                        setAssignRaw(item.assigned_uids.join(', '));
-                                      }}
-                                      className="px-2.5 py-1 text-xs rounded-md border border-stone-300 dark:border-stone-700"
-                                    >
-                                      Assign
-                                    </button>
-                                  )}
-                                  <button
-                                    type="button"
-                                    onClick={() => setExecModalItem(item)}
-                                    className="px-2.5 py-1 text-xs font-medium rounded-md bg-[#B88B1E] dark:bg-[#D4AF37] text-white dark:text-stone-950 inline-flex items-center gap-1"
-                                  >
-                                    <CheckCircle2 className="w-3 h-3" /> Log Execution
-                                  </button>
                                 </div>
                               </div>
 
-                              {item.assigned_uids.length > 0 && (
+                              {stepItem && stepItem.assigned_uids.length > 0 && (
                                 <div className="flex items-center gap-2 text-xs text-stone-500">
-                                  <span>Assigned:</span>
-                                  {item.assigned_uids.map((uid) => (
+                                  <span>Step Assigned:</span>
+                                  {stepItem.assigned_uids.map((uid) => (
                                     <UserAvatar key={uid} universalId={uid} showUid />
                                   ))}
+                                </div>
+                              )}
+
+                              {/* Multiple Fixes under this Step */}
+                              {stepGroup.fixes.length > 0 && (
+                                <div className="border-s-2 border-stone-200 dark:border-stone-700 ps-4 space-y-2.5 pt-1">
+                                  {stepGroup.fixes.map((fixItem) => {
+                                    const fixAgree = Object.values(fixItem.votes).filter((v) => v === 'Agree').length;
+                                    const fixDisagree = Object.values(fixItem.votes).filter((v) => v === 'Disagree').length;
+                                    return (
+                                      <div
+                                        key={fixItem.id}
+                                        className="p-3 rounded-lg bg-white dark:bg-[#12151B] border border-stone-200 dark:border-stone-800 space-y-2"
+                                      >
+                                        <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-2">
+                                          <div className="space-y-0.5">
+                                            <p className="text-[11px] font-mono-tabular text-stone-500">
+                                              {fixItem.task_code} · {fixItem.approval_status} · {fixItem.execution_status}
+                                              {fixItem.estimated_cost ? ` · Est. ${fixItem.estimated_cost} pts` : ''}
+                                            </p>
+                                            <p className="text-xs font-semibold text-stone-900 dark:text-stone-100">
+                                              Fix: {fixItem.fix_title}
+                                            </p>
+                                            {fixItem.description && (
+                                              <p className="text-xs text-stone-600 dark:text-stone-300">
+                                                {fixItem.description}
+                                              </p>
+                                            )}
+                                          </div>
+                                          <div className="flex items-center gap-2 flex-wrap shrink-0">
+                                            <button
+                                              type="button"
+                                              onClick={() => voteHierarchyItem(fixItem.id, 'Agree')}
+                                              className="px-2 py-1 text-xs rounded border border-stone-300 dark:border-stone-700 hover:border-emerald-500 inline-flex items-center gap-1 font-mono-tabular"
+                                            >
+                                              <ThumbsUp className="w-3 h-3 text-emerald-600" /> {fixAgree}
+                                            </button>
+                                            <button
+                                              type="button"
+                                              onClick={() => voteHierarchyItem(fixItem.id, 'Disagree')}
+                                              className="px-2 py-1 text-xs rounded border border-stone-300 dark:border-stone-700 hover:border-rose-500 inline-flex items-center gap-1 font-mono-tabular"
+                                            >
+                                              <ThumbsDown className="w-3 h-3 text-rose-600" /> {fixDisagree}
+                                            </button>
+                                            {isLeader && (
+                                              <button
+                                                type="button"
+                                                onClick={() => {
+                                                  setAssignModalItem(fixItem);
+                                                  setAssignRaw(fixItem.assigned_uids.join(', '));
+                                                }}
+                                                className="px-2 py-1 text-xs rounded border border-stone-300 dark:border-stone-700"
+                                              >
+                                                Assign
+                                              </button>
+                                            )}
+                                            <button
+                                              type="button"
+                                              onClick={() => setExecModalItem(fixItem)}
+                                              className="px-2.5 py-1 text-xs font-medium rounded bg-[#B88B1E] dark:bg-[#D4AF37] text-white dark:text-stone-950 inline-flex items-center gap-1"
+                                            >
+                                              <CheckCircle2 className="w-3 h-3" /> Log Execution
+                                            </button>
+                                          </div>
+                                        </div>
+                                        {fixItem.assigned_uids.length > 0 && (
+                                          <div className="flex items-center gap-2 text-xs text-stone-500">
+                                            <span>Assigned:</span>
+                                            {fixItem.assigned_uids.map((uid) => (
+                                              <UserAvatar key={uid} universalId={uid} showUid />
+                                            ))}
+                                          </div>
+                                        )}
+                                      </div>
+                                    );
+                                  })}
                                 </div>
                               )}
                             </div>
@@ -513,6 +887,318 @@ export const ProjectsEmploymentView: React.FC = () => {
                   ))}
                 </div>
               )}
+            </div>
+          )}
+
+          {subTab === 'investments' && activeInvMetrics && (
+            <div className="space-y-6">
+              {/* Project Investment Header & Actions */}
+              <div className="flex flex-col md:flex-row md:items-center justify-between gap-4">
+                <div className="space-y-1 text-xs text-stone-500 dark:text-stone-400">
+                  <p>
+                    Investment Round Status:{' '}
+                    <span className="font-semibold text-stone-900 dark:text-stone-100">
+                      {activeProject.investment_status || 'Open'}
+                    </span>{' '}
+                    · Goal:{' '}
+                    <span className="font-mono-tabular font-semibold text-stone-900 dark:text-stone-100">
+                      {activeProject.investment_goal_points || 0} pts
+                    </span>{' '}
+                    · Active Shareholders: {activeInvMetrics.shareCount}
+                  </p>
+                  <div className="flex items-center gap-4 flex-wrap">
+                    {activeProject.budget_doc_url && (
+                      <a
+                        href={activeProject.budget_doc_url}
+                        target="_blank"
+                        rel="noopener noreferrer"
+                        className="text-[#B88B1E] dark:text-[#D4AF37] hover:underline inline-flex items-center gap-1"
+                      >
+                        <FileSpreadsheet className="w-3.5 h-3.5" /> Budget Sheet
+                      </a>
+                    )}
+                    {activeProject.presentation_url && (
+                      <a
+                        href={activeProject.presentation_url}
+                        target="_blank"
+                        rel="noopener noreferrer"
+                        className="text-[#B88B1E] dark:text-[#D4AF37] hover:underline inline-flex items-center gap-1"
+                      >
+                        <ExternalLink className="w-3.5 h-3.5" /> Project Presentation
+                      </a>
+                    )}
+                  </div>
+                </div>
+
+                <div className="flex items-center gap-2 flex-wrap">
+                  {(activeProject.investment_goal_points || 0) > 0 &&
+                    activeProject.investment_status !== 'Deactivated' &&
+                    activeProject.investment_status !== 'Closed' && (
+                      <button
+                        type="button"
+                        onClick={() => setInvestModalOpen(true)}
+                        className="px-3.5 py-2 text-xs font-semibold rounded-lg bg-[#B88B1E] dark:bg-[#D4AF37] text-white dark:text-stone-950 inline-flex items-center gap-1.5"
+                      >
+                        <Coins className="w-3.5 h-3.5" /> Invest in Project
+                      </button>
+                    )}
+                  {(isLeader || isAdmin) && (
+                    <>
+                      <button
+                        type="button"
+                        onClick={() => setReportDialogOpen(true)}
+                        className="px-3.5 py-2 text-xs font-semibold rounded-lg bg-emerald-600 text-white hover:bg-emerald-700 inline-flex items-center gap-1.5"
+                      >
+                        <Send className="w-3.5 h-3.5" /> Publish Shareholder Report
+                      </button>
+                      <button
+                        type="button"
+                        onClick={openConfigModal}
+                        className="px-3 py-2 text-xs font-medium rounded-lg border border-stone-300 dark:border-stone-700 hover:bg-stone-100 dark:hover:bg-stone-800 inline-flex items-center gap-1.5"
+                      >
+                        <Settings className="w-3.5 h-3.5" /> Round Settings
+                      </button>
+                    </>
+                  )}
+                </div>
+              </div>
+
+              {/* Project Financial Metrics Strip */}
+              <div className="grid grid-cols-2 lg:grid-cols-5 gap-3">
+                <div className="p-4 rounded-xl bg-stone-50 dark:bg-[#0B0D10] border border-stone-200 dark:border-stone-800 space-y-1.5">
+                  <p className="text-xs text-stone-500 dark:text-stone-400">Invested Capital</p>
+                  <p className="text-lg font-mono-tabular font-bold text-[#B88B1E] dark:text-[#D4AF37]">
+                    {activeInvMetrics.totalInvested} pts
+                  </p>
+                  {(activeProject.investment_goal_points || 0) > 0 && (
+                    <div className="w-full h-1.5 rounded-full bg-stone-200 dark:bg-stone-800 overflow-hidden">
+                      <div
+                        className="h-full bg-[#B88B1E] dark:bg-[#D4AF37]"
+                        style={{
+                          width: `${Math.min(
+                            100,
+                            Math.round(
+                              (activeInvMetrics.totalInvested /
+                                (activeProject.investment_goal_points || 1)) *
+                                100
+                            )
+                          )}%`,
+                        }}
+                      />
+                    </div>
+                  )}
+                </div>
+                <div className="p-4 rounded-xl bg-stone-50 dark:bg-[#0B0D10] border border-stone-200 dark:border-stone-800 space-y-1">
+                  <p className="text-xs text-stone-500 dark:text-stone-400">Total Accumulated Cost</p>
+                  <p className="text-lg font-mono-tabular font-bold text-rose-700 dark:text-rose-400">
+                    {activeInvMetrics.reportedCost} pts
+                  </p>
+                </div>
+                <div className="p-4 rounded-xl bg-stone-50 dark:bg-[#0B0D10] border border-stone-200 dark:border-stone-800 space-y-1">
+                  <p className="text-xs text-stone-500 dark:text-stone-400">Linked Listing Income</p>
+                  <p className="text-lg font-mono-tabular font-bold text-emerald-700 dark:text-emerald-400">
+                    {activeInvMetrics.realTimeListingIncome} pts
+                  </p>
+                  {activeInvMetrics.pendingListingIncome > 0 && (
+                    <p className="text-[11px] font-mono-tabular text-stone-500">
+                      +{activeInvMetrics.pendingListingIncome} pts pending
+                    </p>
+                  )}
+                </div>
+                <div className="p-4 rounded-xl bg-stone-50 dark:bg-[#0B0D10] border border-stone-200 dark:border-stone-800 space-y-1">
+                  <p className="text-xs text-stone-500 dark:text-stone-400">Total Accumulated Income</p>
+                  <p className="text-lg font-mono-tabular font-bold text-emerald-700 dark:text-emerald-400">
+                    {activeInvMetrics.totalAccumulatedIncome} pts
+                  </p>
+                </div>
+                <div className="p-4 rounded-xl bg-stone-50 dark:bg-[#0B0D10] border border-stone-200 dark:border-stone-800 space-y-1">
+                  <p className="text-xs text-stone-500 dark:text-stone-400">Net Position</p>
+                  <p
+                    className={`text-lg font-mono-tabular font-bold ${
+                      activeInvMetrics.netPosition >= 0
+                        ? 'text-emerald-700 dark:text-emerald-400'
+                        : 'text-rose-700 dark:text-rose-400'
+                    }`}
+                  >
+                    {activeInvMetrics.netPosition >= 0
+                      ? `+${activeInvMetrics.netPosition}`
+                      : activeInvMetrics.netPosition}{' '}
+                    pts
+                  </p>
+                </div>
+              </div>
+
+              {/* Project Cumulative Cost & Income Diagram */}
+              <InvestmentAnalyticsChart
+                points={activeChartSeries}
+                title={`Cumulative Cost & Income — ${activeProject.project_code}`}
+                subtitle="Aggregates each shareholder report sequentially from inception until now, plus real-time linked listing revenue"
+              />
+
+              {/* Linked Marketplace Listings feeding real-time income */}
+              <div className="space-y-3">
+                <h3 className="text-sm font-semibold text-stone-900 dark:text-stone-100">
+                  Linked Marketplace Products & Services ({linkedListings.length})
+                </h3>
+                {linkedListings.length === 0 ? (
+                  <p className="text-xs text-stone-500">
+                    No marketplace listings linked to this project yet. Listing owners can link products/services when creating a listing to stream real-time order income here.
+                  </p>
+                ) : (
+                  <div className="overflow-x-auto">
+                    <table className="w-full text-start text-xs">
+                      <thead>
+                        <tr className="border-b border-stone-200 dark:border-stone-800 text-stone-500">
+                          <th className="py-2 pe-3 font-medium">Listing</th>
+                          <th className="py-2 pe-3 font-medium">Owner</th>
+                          <th className="py-2 pe-3 text-end font-medium">Delivered Income</th>
+                          <th className="py-2 text-end font-medium">Pending Orders</th>
+                        </tr>
+                      </thead>
+                      <tbody className="divide-y divide-stone-100 dark:divide-stone-800/70">
+                        {linkedListings.map((lst) => {
+                          const deliveredPts = orders
+                            .filter((o) => o.listing_id === lst.id && o.delivery_status === 'Delivered')
+                            .reduce((acc, o) => acc + o.total_points, 0);
+                          const pendingPts = orders
+                            .filter(
+                              (o) =>
+                                o.listing_id === lst.id &&
+                                o.order_status !== 'Rejected' &&
+                                o.delivery_status !== 'Delivered'
+                            )
+                            .reduce((acc, o) => acc + o.total_points, 0);
+                          return (
+                            <tr key={lst.id}>
+                              <td className="py-2.5 pe-3">
+                                <span className="font-medium text-stone-900 dark:text-stone-100">
+                                  {lst.title}
+                                </span>{' '}
+                                <span className="font-mono-tabular text-stone-500">
+                                  ({lst.listing_code} · {lst.listing_type})
+                                </span>
+                              </td>
+                              <td className="py-2.5 pe-3">
+                                <UserAvatar universalId={lst.owner_uid} showUid />
+                              </td>
+                              <td className="py-2.5 pe-3 text-end font-mono-tabular font-semibold text-emerald-700 dark:text-emerald-400">
+                                +{deliveredPts} pts
+                              </td>
+                              <td className="py-2.5 text-end font-mono-tabular text-stone-500">
+                                {pendingPts} pts
+                              </td>
+                            </tr>
+                          );
+                        })}
+                      </tbody>
+                    </table>
+                  </div>
+                )}
+              </div>
+
+              {/* Shareholder Reports Timeline */}
+              <div className="space-y-3">
+                <h3 className="text-sm font-semibold text-stone-900 dark:text-stone-100">
+                  Shareholder Progress & Financial Reports ({activeProjectReports.length})
+                </h3>
+                {activeProjectReports.length === 0 ? (
+                  <p className="text-xs text-stone-500">No shareholder reports published yet.</p>
+                ) : (
+                  <div className="space-y-3">
+                    {activeProjectReports.map((rep) => (
+                      <div
+                        key={rep.id}
+                        className="p-4 rounded-xl bg-stone-50 dark:bg-[#0B0D10] border border-stone-200 dark:border-stone-800 space-y-2 text-xs"
+                      >
+                        <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-2">
+                          <div>
+                            <span className="font-mono-tabular text-[#B88B1E] dark:text-[#D4AF37] font-semibold">
+                              {rep.report_code}
+                            </span>{' '}
+                            ·{' '}
+                            <span className="font-semibold text-sm text-stone-900 dark:text-stone-100">
+                              {rep.title}
+                            </span>
+                          </div>
+                          <span className="font-mono-tabular text-stone-500">
+                            {rep.created_at.slice(0, 10)} · By {rep.author_uid}
+                          </span>
+                        </div>
+                        <p className="text-stone-700 dark:text-stone-300 leading-relaxed">
+                          {rep.summary_text}
+                        </p>
+                        <div className="flex flex-wrap gap-4 font-mono-tabular pt-1">
+                          <span className="text-rose-700 dark:text-rose-400">
+                            Period Cost: {rep.period_cost_points} pts (Cum: {rep.total_accumulated_cost} pts)
+                          </span>
+                          <span className="text-emerald-700 dark:text-emerald-400">
+                            Period Income: {rep.period_income_points} pts (Cum: {rep.total_accumulated_income} pts)
+                          </span>
+                        </div>
+                        {rep.links.length > 0 && (
+                          <div className="flex flex-wrap gap-3 pt-1">
+                            {rep.links.map((lnk, idx) => (
+                              <a
+                                key={`${rep.id}_lnk_${idx}`}
+                                href={lnk.url}
+                                target="_blank"
+                                rel="noopener noreferrer"
+                                className="inline-flex items-center gap-1 text-[#B88B1E] dark:text-[#D4AF37] hover:underline"
+                              >
+                                <Link2 className="w-3.5 h-3.5" />
+                                {lnk.label || lnk.url}
+                              </a>
+                            ))}
+                          </div>
+                        )}
+                      </div>
+                    ))}
+                  </div>
+                )}
+              </div>
+
+              {/* Active Shareholders Table */}
+              <div className="space-y-3">
+                <h3 className="text-sm font-semibold text-stone-900 dark:text-stone-100">
+                  Project Shareholders ({activeProjectInvestments.length})
+                </h3>
+                {activeProjectInvestments.length === 0 ? (
+                  <p className="text-xs text-stone-500">No investments recorded for this project yet.</p>
+                ) : (
+                  <div className="overflow-x-auto">
+                    <table className="w-full text-start text-xs">
+                      <thead>
+                        <tr className="border-b border-stone-200 dark:border-stone-800 text-stone-500">
+                          <th className="py-2 pe-3 font-medium">Code</th>
+                          <th className="py-2 pe-3 font-medium">Shareholder</th>
+                          <th className="py-2 pe-3 text-end font-medium">Invested</th>
+                          <th className="py-2 pe-3 text-end font-medium">Share %</th>
+                          <th className="py-2 text-end font-medium">Dividends Earned</th>
+                        </tr>
+                      </thead>
+                      <tbody className="divide-y divide-stone-100 dark:divide-stone-800/70">
+                        {activeProjectInvestments.map((inv) => (
+                          <tr key={inv.id}>
+                            <td className="py-2.5 pe-3 font-mono-tabular">{inv.investment_code}</td>
+                            <td className="py-2.5 pe-3">
+                              <UserAvatar universalId={inv.investor_uid} showName showUid />
+                            </td>
+                            <td className="py-2.5 pe-3 text-end font-mono-tabular font-semibold">
+                              {inv.invested_points} pts
+                            </td>
+                            <td className="py-2.5 pe-3 text-end font-mono-tabular">
+                              {inv.share_percentage}%
+                            </td>
+                            <td className="py-2.5 text-end font-mono-tabular font-semibold text-emerald-700 dark:text-emerald-400">
+                              +{inv.dividends_earned} pts
+                            </td>
+                          </tr>
+                        ))}
+                      </tbody>
+                    </table>
+                  </div>
+                )}
+              </div>
             </div>
           )}
 
@@ -689,7 +1375,7 @@ export const ProjectsEmploymentView: React.FC = () => {
       {/* Create Project Modal */}
       {createProjectOpen && (
         <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/65 backdrop-blur-sm p-4">
-          <div className="bg-white dark:bg-[#12151B] border border-stone-200 dark:border-stone-800 rounded-xl max-w-md w-full p-6 space-y-4">
+          <div className="bg-white dark:bg-[#12151B] border border-stone-200 dark:border-stone-800 rounded-xl max-w-md w-full p-6 space-y-4 max-h-[90vh] overflow-y-auto">
             <div className="flex items-center justify-between border-b border-stone-200 dark:border-stone-800 pb-3">
               <h3 className="font-cinzel text-lg font-bold">Create Cooperative Project</h3>
               <button onClick={() => setCreateProjectOpen(false)} className="p-1 text-stone-500">
@@ -738,11 +1424,263 @@ export const ProjectsEmploymentView: React.FC = () => {
                 onChange={(e) => setPDesc(e.target.value)}
                 className="w-full px-3 py-2 text-sm rounded-lg border border-stone-300 dark:border-stone-700 bg-stone-50 dark:bg-[#0B0D10]"
               />
+              <div className="pt-2 border-t border-stone-200 dark:border-stone-800 space-y-2">
+                <p className="font-semibold text-stone-700 dark:text-stone-300">
+                  Optional Project Investment Round
+                </p>
+                <input
+                  type="number"
+                  min={0}
+                  placeholder="Investment Goal (pts, 0 = none)"
+                  value={pGoal}
+                  onChange={(e) => setPGoal(Number(e.target.value))}
+                  className="w-full px-3 py-2 text-sm font-mono-tabular rounded-lg border border-stone-300 dark:border-stone-700 bg-stone-50 dark:bg-[#0B0D10]"
+                />
+                <input
+                  type="url"
+                  placeholder="Budget Sheet URL (Optional)"
+                  value={pBudgetDoc}
+                  onChange={(e) => setPBudgetDoc(e.target.value)}
+                  className="w-full px-3 py-2 text-sm rounded-lg border border-stone-300 dark:border-stone-700 bg-stone-50 dark:bg-[#0B0D10]"
+                />
+                <input
+                  type="url"
+                  placeholder="Presentation URL (Optional)"
+                  value={pPresUrl}
+                  onChange={(e) => setPPresUrl(e.target.value)}
+                  className="w-full px-3 py-2 text-sm rounded-lg border border-stone-300 dark:border-stone-700 bg-stone-50 dark:bg-[#0B0D10]"
+                />
+              </div>
               <button
                 type="submit"
                 className="w-full py-2.5 text-sm font-semibold rounded-lg bg-[#B88B1E] dark:bg-[#D4AF37] text-white dark:text-stone-950"
               >
                 Create Project
+              </button>
+            </form>
+          </div>
+        </div>
+      )}
+
+      {/* Invest in Project Modal */}
+      {investModalOpen && activeProject && (
+        <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/65 backdrop-blur-sm p-4">
+          <div className="bg-white dark:bg-[#12151B] border border-stone-200 dark:border-stone-800 rounded-xl max-w-md w-full p-6 space-y-4">
+            <div className="flex items-center justify-between border-b border-stone-200 dark:border-stone-800 pb-3">
+              <h3 className="font-cinzel text-lg font-bold">
+                Invest in {activeProject.project_code}
+              </h3>
+              <button onClick={() => setInvestModalOpen(false)} className="p-1 text-stone-500">
+                <X className="w-5 h-5" />
+              </button>
+            </div>
+            <p className="text-xs text-stone-500 dark:text-stone-400">
+              Shareholders earn proportional dividends from Delivered orders of Marketplace products/services linked to {activeProject.name} and receive every Shareholder Progress Report.
+            </p>
+            <form onSubmit={handleInvestSubmit} className="space-y-4">
+              <div>
+                <label className="block text-xs font-medium mb-1">Investment Amount (pts)</label>
+                <input
+                  type="number"
+                  min={10}
+                  required
+                  value={investAmount}
+                  onChange={(e) => setInvestAmount(Number(e.target.value))}
+                  className="w-full px-3 py-2 text-sm font-mono-tabular rounded-lg border border-stone-300 dark:border-stone-700 bg-stone-50 dark:bg-[#0B0D10]"
+                />
+              </div>
+              <button
+                type="submit"
+                className="w-full py-2.5 text-sm font-semibold rounded-lg bg-[#B88B1E] dark:bg-[#D4AF37] text-white dark:text-stone-950"
+              >
+                Confirm {investAmount} pts Investment
+              </button>
+            </form>
+          </div>
+        </div>
+      )}
+
+      {/* Project Investment Config Modal */}
+      {configModalOpen && activeProject && (
+        <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/65 backdrop-blur-sm p-4">
+          <div className="bg-white dark:bg-[#12151B] border border-stone-200 dark:border-stone-800 rounded-xl max-w-md w-full p-6 space-y-4">
+            <div className="flex items-center justify-between border-b border-stone-200 dark:border-stone-800 pb-3">
+              <h3 className="font-cinzel text-base font-bold">
+                Project Investment Round Settings
+              </h3>
+              <button onClick={() => setConfigModalOpen(false)} className="p-1 text-stone-500">
+                <X className="w-5 h-5" />
+              </button>
+            </div>
+            <form onSubmit={handleSaveInvConfig} className="space-y-3 text-xs">
+              <div>
+                <label className="block font-medium mb-1">Investment Goal (pts)</label>
+                <input
+                  type="number"
+                  min={0}
+                  value={cfgGoal}
+                  onChange={(e) => setCfgGoal(Number(e.target.value))}
+                  className="w-full px-3 py-2 text-sm font-mono-tabular rounded-lg border border-stone-300 dark:border-stone-700 bg-stone-50 dark:bg-[#0B0D10]"
+                />
+              </div>
+              <div>
+                <label className="block font-medium mb-1">Round Status</label>
+                <select
+                  value={cfgStatus}
+                  onChange={(e) => setCfgStatus(e.target.value as 'Open' | 'Deactivated' | 'Closed')}
+                  className="w-full px-3 py-2 text-sm rounded-lg border border-stone-300 dark:border-stone-700 bg-stone-50 dark:bg-[#0B0D10]"
+                >
+                  <option value="Open">Open (Accepting Investments)</option>
+                  <option value="Deactivated">Deactivated (Fulfill Existing Commitments)</option>
+                  <option value="Closed">Closed</option>
+                </select>
+              </div>
+              <div>
+                <label className="block font-medium mb-1">Budget Document URL</label>
+                <input
+                  type="url"
+                  value={cfgBudgetDoc}
+                  onChange={(e) => setCfgBudgetDoc(e.target.value)}
+                  className="w-full px-3 py-2 text-sm rounded-lg border border-stone-300 dark:border-stone-700 bg-stone-50 dark:bg-[#0B0D10]"
+                />
+              </div>
+              <div>
+                <label className="block font-medium mb-1">Presentation URL</label>
+                <input
+                  type="url"
+                  value={cfgPresUrl}
+                  onChange={(e) => setCfgPresUrl(e.target.value)}
+                  className="w-full px-3 py-2 text-sm rounded-lg border border-stone-300 dark:border-stone-700 bg-stone-50 dark:bg-[#0B0D10]"
+                />
+              </div>
+              <button
+                type="submit"
+                className="w-full py-2.5 text-sm font-semibold rounded-lg bg-[#B88B1E] dark:bg-[#D4AF37] text-white dark:text-stone-950"
+              >
+                Save Investment Round Settings
+              </button>
+            </form>
+          </div>
+        </div>
+      )}
+
+      {/* Publish Shareholder Report Dialog */}
+      {reportDialogOpen && activeProject && (
+        <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/65 backdrop-blur-sm p-4">
+          <div className="bg-white dark:bg-[#12151B] border border-stone-200 dark:border-stone-800 rounded-xl max-w-lg w-full max-h-[90vh] overflow-y-auto p-6 space-y-4">
+            <div className="flex items-center justify-between border-b border-stone-200 dark:border-stone-800 pb-3">
+              <div>
+                <h3 className="font-cinzel text-lg font-bold">Publish Shareholder Report</h3>
+                <p className="text-xs text-stone-500">
+                  Notifies all {activeInvMetrics?.shareCount || 0} active shareholders & updates cumulative analytics
+                </p>
+              </div>
+              <button onClick={() => setReportDialogOpen(false)} className="p-1 text-stone-500">
+                <X className="w-5 h-5" />
+              </button>
+            </div>
+            <form onSubmit={handleReportSubmit} className="space-y-3 text-xs">
+              <div>
+                <label className="block font-medium mb-1">Report Title</label>
+                <input
+                  type="text"
+                  required
+                  placeholder="e.g. Q2 Solar Assembly & Distribution Revenue"
+                  value={repTitle}
+                  onChange={(e) => setRepTitle(e.target.value)}
+                  className="w-full px-3 py-2 text-sm rounded-lg border border-stone-300 dark:border-stone-700 bg-stone-50 dark:bg-[#0B0D10]"
+                />
+              </div>
+              <div className="grid grid-cols-2 gap-3">
+                <div>
+                  <label className="block font-medium mb-1">Period Cost (pts)</label>
+                  <input
+                    type="number"
+                    min={0}
+                    required
+                    value={repCost}
+                    onChange={(e) => setRepCost(Number(e.target.value))}
+                    className="w-full px-3 py-2 text-sm font-mono-tabular rounded-lg border border-stone-300 dark:border-stone-700 bg-stone-50 dark:bg-[#0B0D10]"
+                  />
+                </div>
+                <div>
+                  <label className="block font-medium mb-1">Period Income (pts)</label>
+                  <input
+                    type="number"
+                    min={0}
+                    required
+                    value={repIncome}
+                    onChange={(e) => setRepIncome(Number(e.target.value))}
+                    className="w-full px-3 py-2 text-sm font-mono-tabular rounded-lg border border-stone-300 dark:border-stone-700 bg-stone-50 dark:bg-[#0B0D10]"
+                  />
+                </div>
+              </div>
+              <div>
+                <label className="block font-medium mb-1">Report Text & Breakdown</label>
+                <textarea
+                  rows={4}
+                  required
+                  placeholder="Share operational updates, costs incurred, and revenue milestones with shareholders..."
+                  value={repSummary}
+                  onChange={(e) => setRepSummary(e.target.value)}
+                  className="w-full px-3 py-2 text-sm rounded-lg border border-stone-300 dark:border-stone-700 bg-stone-50 dark:bg-[#0B0D10]"
+                />
+              </div>
+              <div className="space-y-2">
+                <div className="flex items-center justify-between">
+                  <label className="font-medium">Supporting Links ({repLinks.length})</label>
+                  <button
+                    type="button"
+                    onClick={() =>
+                      setRepLinks((prev) => [...prev, { label: '', url: '' }])
+                    }
+                    className="text-[#B88B1E] dark:text-[#D4AF37] hover:underline inline-flex items-center gap-1"
+                  >
+                    <Plus className="w-3.5 h-3.5" /> Add Link
+                  </button>
+                </div>
+                {repLinks.map((lnk, idx) => (
+                  <div key={idx} className="grid grid-cols-12 gap-2 items-center">
+                    <input
+                      type="text"
+                      placeholder="Label (e.g. Receipt PDF)"
+                      value={lnk.label}
+                      onChange={(e) =>
+                        setRepLinks((prev) =>
+                          prev.map((row, i) => (i === idx ? { ...row, label: e.target.value } : row))
+                        )
+                      }
+                      className="col-span-4 px-2.5 py-1.5 rounded border border-stone-300 dark:border-stone-700 bg-stone-50 dark:bg-[#0B0D10]"
+                    />
+                    <input
+                      type="url"
+                      placeholder="https://..."
+                      value={lnk.url}
+                      onChange={(e) =>
+                        setRepLinks((prev) =>
+                          prev.map((row, i) => (i === idx ? { ...row, url: e.target.value } : row))
+                        )
+                      }
+                      className="col-span-7 px-2.5 py-1.5 rounded border border-stone-300 dark:border-stone-700 bg-stone-50 dark:bg-[#0B0D10]"
+                    />
+                    {repLinks.length > 1 && (
+                      <button
+                        type="button"
+                        onClick={() => setRepLinks((prev) => prev.filter((_, i) => i !== idx))}
+                        className="col-span-1 p-1 text-stone-400 hover:text-rose-600"
+                        aria-label="Remove link"
+                      >
+                        <Trash2 className="w-3.5 h-3.5" />
+                      </button>
+                    )}
+                  </div>
+                ))}
+              </div>
+              <button
+                type="submit"
+                className="w-full py-2.5 text-sm font-semibold rounded-lg bg-emerald-600 text-white hover:bg-emerald-700"
+              >
+                Publish & Notify Shareholders
               </button>
             </form>
           </div>

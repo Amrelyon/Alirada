@@ -1,9 +1,11 @@
-import React, { useState } from 'react';
+import React, { useMemo, useState } from 'react';
 import { PlayCircle, EyeOff, Eye, ArrowRight, Compass, Layers, ShoppingBag, Repeat } from 'lucide-react';
 import { useAlirada } from '../context/AliradaContext';
 import { HARDSHIP_MATRIX } from '../data/masterData';
+import { buildPlatformInvestmentSeries } from '../lib/ledgerMath';
 import { getEmbeddableVideoUrl } from '../lib/mediaUtils';
 import { UserAvatar } from '../components/UserAvatar';
+import { InvestmentAnalyticsChart } from '../components/InvestmentAnalyticsChart';
 
 export const HomeOverviewView: React.FC = () => {
   const {
@@ -13,6 +15,9 @@ export const HomeOverviewView: React.FC = () => {
     serviceLogs,
     listings,
     projects,
+    orders,
+    investments,
+    projectReports,
     systemConfig,
     setActiveSection,
     setInspectedUid,
@@ -22,6 +27,10 @@ export const HomeOverviewView: React.FC = () => {
 
   const [hideIntroVideo, setHideIntroVideo] = useState(false);
   const metrics = metricsMap[currentProfile.universal_id];
+  const platformInvestment = useMemo(
+    () => buildPlatformInvestmentSeries(investments, projectReports, orders, listings),
+    [investments, projectReports, orders, listings]
+  );
   const embedUrl = getEmbeddableVideoUrl(systemConfig.intro_video_url);
   const unreadAlerts = notifications.filter((n) => !n.read);
 
@@ -216,9 +225,9 @@ export const HomeOverviewView: React.FC = () => {
           className="text-left bg-white dark:bg-[#12151B] border border-stone-200 dark:border-stone-800 hover:border-[#B88B1E] dark:hover:border-[#D4AF37] rounded-xl p-4 transition-colors space-y-1.5"
         >
           <ShoppingBag className="w-4 h-4 text-[#B88B1E] dark:text-[#D4AF37]" />
-          <p className="text-sm font-semibold text-stone-900 dark:text-stone-100">Marketplace & Invest</p>
+          <p className="text-sm font-semibold text-stone-900 dark:text-stone-100">Marketplace</p>
           <p className="text-xs text-stone-500 dark:text-stone-400">
-            {listings.length} active listings with crowdfunding & delivery
+            {listings.length} products, services & courses linked to project income
           </p>
         </button>
 
@@ -228,9 +237,9 @@ export const HomeOverviewView: React.FC = () => {
           className="text-left bg-white dark:bg-[#12151B] border border-stone-200 dark:border-stone-800 hover:border-[#B88B1E] dark:hover:border-[#D4AF37] rounded-xl p-4 transition-colors space-y-1.5"
         >
           <Layers className="w-4 h-4 text-[#B88B1E] dark:text-[#D4AF37]" />
-          <p className="text-sm font-semibold text-stone-900 dark:text-stone-100">Projects & Jobs</p>
+          <p className="text-sm font-semibold text-stone-900 dark:text-stone-100">Projects, Invest & Jobs</p>
           <p className="text-xs text-stone-500 dark:text-stone-400">
-            {projects.length} cooperative workspaces & hiring boards
+            {projects.length} cooperative projects, shareholder rounds & jobs
           </p>
         </button>
 
@@ -245,6 +254,37 @@ export const HomeOverviewView: React.FC = () => {
             Embeddable checkout widgets, batches, & point swaps
           </p>
         </button>
+      </section>
+
+      {/* Platform-Wide Accumulated Investments & Income Diagram */}
+      <section className="space-y-4">
+        <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-2">
+          <div>
+            <h2 className="text-base font-semibold text-stone-900 dark:text-stone-100">
+              Platform-Wide Accumulated Investment & Income
+            </h2>
+            <p className="text-xs text-stone-500 dark:text-stone-400">
+              Combined cooperative project investments, reported operating costs, shareholder reports, and real-time linked listing income
+            </p>
+          </div>
+          <div className="flex flex-wrap items-center gap-4 text-xs font-mono-tabular">
+            <span className="text-[#B88B1E] dark:text-[#D4AF37]">
+              Invested: {platformInvestment.totalInvested} pts
+            </span>
+            <span className="text-rose-700 dark:text-rose-400">
+              Cost: {platformInvestment.totalCost} pts
+            </span>
+            <span className="text-emerald-700 dark:text-emerald-400 font-semibold">
+              Income: {platformInvestment.totalIncome} pts (Live Listings +{platformInvestment.realTimeListingIncome} pts)
+            </span>
+          </div>
+        </div>
+        <InvestmentAnalyticsChart
+          points={platformInvestment.points}
+          title="General Cooperative Investment & Income Trajectory"
+          subtitle="Tracks cumulative capital invested, reported project costs, and combined project + linked-listing revenue from inception to now"
+          showInvested
+        />
       </section>
 
       {/* Recent Cooperative Activity + 10-Level Hardship Matrix */}

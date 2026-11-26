@@ -127,13 +127,19 @@ export const ServiceLedgerView: React.FC = () => {
     }
   };
 
+  const hasReceivedServiceFrom = (targetProviderUid: string) =>
+    Boolean(
+      targetProviderUid &&
+        targetProviderUid !== currentProfile.universal_id &&
+        serviceLogs.some(
+          (l) =>
+            l.provider_uid === targetProviderUid &&
+            l.recipient_uid === currentProfile.universal_id
+        )
+    );
+
   const openRecognitionModal = (log: ServiceLog) => {
-    const defaultTarget =
-      log.provider_uid !== currentProfile.universal_id
-        ? log.provider_uid
-        : log.recipient_uid !== currentProfile.universal_id
-          ? log.recipient_uid
-          : '';
+    const defaultTarget = hasReceivedServiceFrom(log.provider_uid) ? log.provider_uid : '';
     setRecognitionModalLog(log);
     setRecognitionTargetUid(defaultTarget);
     setRecognitionDirection('UPWARD');
@@ -664,9 +670,7 @@ export const ServiceLedgerView: React.FC = () => {
               </thead>
               <tbody className="divide-y divide-stone-100 dark:divide-stone-800/70">
                 {filteredLogs.map((log) => {
-                  const canRecognizeRow =
-                    log.provider_uid !== currentProfile.universal_id ||
-                    log.recipient_uid !== currentProfile.universal_id;
+                  const canRecognizeRow = hasReceivedServiceFrom(log.provider_uid);
                   return (
                     <tr key={log.id} className="hover:bg-stone-50 dark:hover:bg-stone-900/40">
                       <td className="py-3 pe-3 font-mono-tabular whitespace-nowrap">
@@ -763,8 +767,11 @@ export const ServiceLedgerView: React.FC = () => {
               <p className="font-medium text-stone-900 dark:text-stone-100">
                 {recognitionModalLog.service_type}
               </p>
+              <p className="text-[11px] text-stone-500 dark:text-stone-400">
+                Peer recognition is restricted strictly to recipients who received a logged service from the target member.
+              </p>
               <div className="flex items-center justify-between gap-2 pt-1">
-                <span>Select participant UID to recognize:</span>
+                <span>Select eligible service provider UID:</span>
                 {recognitionTargetUid && (
                   <button
                     type="button"
@@ -788,13 +795,14 @@ export const ServiceLedgerView: React.FC = () => {
                   { role: 'Recipient', uid: recognitionModalLog.recipient_uid },
                 ].map((participant) => {
                   const isSelfParticipant = participant.uid === currentProfile.universal_id;
+                  const eligible = !isSelfParticipant && hasReceivedServiceFrom(participant.uid);
                   const prof = profiles.find((p) => p.universal_id === participant.uid);
                   const selected = recognitionTargetUid === participant.uid;
                   return (
                     <button
                       key={`${participant.role}-${participant.uid}`}
                       type="button"
-                      disabled={isSelfParticipant}
+                      disabled={!eligible}
                       onClick={() => setRecognitionTargetUid(participant.uid)}
                       className={`p-2.5 rounded-lg border text-start transition-colors ${
                         selected
@@ -803,7 +811,8 @@ export const ServiceLedgerView: React.FC = () => {
                       } disabled:opacity-40 disabled:cursor-not-allowed`}
                     >
                       <span className="block text-[11px] text-stone-500 dark:text-stone-400">
-                        {participant.role} {isSelfParticipant ? '(You)' : ''}
+                        {participant.role}{' '}
+                        {isSelfParticipant ? '(You)' : !eligible ? '(Not Received From)' : ''}
                       </span>
                       <span className="block font-medium text-stone-900 dark:text-stone-100 truncate">
                         {prof?.full_name || participant.uid}
