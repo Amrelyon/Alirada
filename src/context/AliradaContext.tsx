@@ -155,6 +155,8 @@ interface AliradaContextValue {
   dismissToast: (id: string) => void;
   pendingPayRef: string;
   clearPendingPayRef: () => void;
+  isEmbedMode: boolean;
+  exitEmbedMode: () => void;
   // Auth methods
   signInWithGoogle: () => Promise<void>;
   signInEmail: (email: string, password: string) => Promise<void>;
@@ -467,6 +469,15 @@ export const AliradaProvider: React.FC<{ children: React.ReactNode }> = ({ child
     return null;
   });
 
+  const [isEmbedMode, setIsEmbedMode] = useState<boolean>(() => {
+    if (typeof window !== 'undefined') {
+      const params = new URLSearchParams(window.location.search);
+      const embedVal = (params.get('embed') || '').trim().toLowerCase();
+      return (embedVal === '1' || embedVal === 'true') && Boolean(params.get('pay_ref'));
+    }
+    return false;
+  });
+
   useEffect(() => {
     if (pendingPayRef) {
       setActiveCheckoutRefCode(pendingPayRef);
@@ -475,9 +486,32 @@ export const AliradaProvider: React.FC<{ children: React.ReactNode }> = ({ child
 
   const clearPendingPayRef = () => {
     setPendingPayRef('');
-    if (typeof window !== 'undefined' && window.location.search.includes('pay_ref=')) {
+    if (typeof window !== 'undefined') {
       const url = new URL(window.location.href);
+      let changed = false;
+      if (url.searchParams.has('pay_ref')) {
+        url.searchParams.delete('pay_ref');
+        changed = true;
+      }
+      if (url.searchParams.has('wp')) {
+        url.searchParams.delete('wp');
+        changed = true;
+      }
+      if (changed) {
+        window.history.replaceState({}, '', url.pathname + url.search);
+      }
+    }
+  };
+
+  const exitEmbedMode = () => {
+    setIsEmbedMode(false);
+    setActiveCheckoutRefCode(null);
+    setPendingPayRef('');
+    if (typeof window !== 'undefined') {
+      const url = new URL(window.location.href);
+      url.searchParams.delete('embed');
       url.searchParams.delete('pay_ref');
+      url.searchParams.delete('wp');
       window.history.replaceState({}, '', url.pathname + url.search);
     }
   };
@@ -1615,6 +1649,10 @@ export const AliradaProvider: React.FC<{ children: React.ReactNode }> = ({ child
       pushToast('error', 'Servant UID and Requester UID cannot be identical.');
       return false;
     }
+    if (!Number.isFinite(payload.deducted_score) || payload.deducted_score <= 0) {
+      pushToast('error', 'Deducted score must be greater than zero.');
+      return false;
+    }
     const servantMetrics = metricsMap[servantUid];
     if (
       servantMetrics &&
@@ -2081,6 +2119,25 @@ export const AliradaProvider: React.FC<{ children: React.ReactNode }> = ({ child
     rejection_reason,
   }) => {
     if (!requireVerifiedAuth()) return false;
+    if (
+      order.order_status === 'Completed' ||
+      order.order_status === 'Rejected' ||
+      order.delivery_status === 'Delivered' ||
+      order.delivery_status === 'Rejected'
+    ) {
+      pushToast(
+        'warning',
+        `Order ${order.order_number} is already finalized (${order.order_status} · ${order.delivery_status}).`
+      );
+      return false;
+    }
+    if (
+      order.buyer_uid.toUpperCase() !== currentProfile.universal_id.toUpperCase() &&
+      !isAdmin
+    ) {
+      pushToast('error', 'Only the buyer or an administrator can confirm or reject delivery.');
+      return false;
+    }
     const delId = makeId('del');
     const delRecord: Delivery = {
       id: delId,
@@ -2957,14 +3014,39 @@ export const AliradaProvider: React.FC<{ children: React.ReactNode }> = ({ child
   const issueTransactionRef: AliradaContextValue['issueTransactionRef'] = async (payload) => {
     if (!requireVerifiedAuth()) return null;
     const refCode = `${payload.ref_type}-${Math.random().toString(36).slice(2, 6).toUpperCase()}-${Math.floor(1000 + Math.random() * 9000)}`;
+    const normalizedLinkedCode = (payload.linked_listing_code || '').trim().toUpperCase();
     const linkedListing =
-      payload.ref_type === 'C2P' && payload.linked_listing_code
-        ? listings.find((l) => l.listing_code === payload.linked_listing_code)
+      payload.ref_type === 'C2P' && normalizedLinkedCode
+        ? listings.find((l) => l.listing_code.trim().toUpperCase() === normalizedLinkedCode)
         : undefined;
-    const lockedAmount =
-      linkedListing && payload.ref_type === 'C2P'
+    const lockedAmount = Number(
+      (linkedListing && payload.ref_type === 'C2P'
         ? linkedListing.price_points
-        : Number(payload.points_amount);
+        : Number(payload.points_amount)
+      ).toFixed(2)
+    );
+    if (!Number.isFinite(lockedAmount) || lockedAmount <= 0) {
+      pushToast('error', 'Reference points amount must be greater than zero.');
+      return null;
+    }
+    if (payload.ref_type === 'P2P') {
+      const myBalance = metricsMap[currentProfile.universal_id]?.balance ?? 0;
+      const pendingP2pIssued = transactionRefs
+        .filter(
+          (r) =>
+            r.ref_type === 'P2P' &&
+            r.status === 'Pending' &&
+            r.issuer_uid.toUpperCase() === currentProfile.universal_id.toUpperCase()
+        )
+        .reduce((acc, r) => acc + r.points_amount, 0);
+      if (myBalance - pendingP2pIssued - lockedAmount < systemConfig.negative_points_floor) {
+        pushToast(
+          'error',
+          `P2P issue exceeds negative points floor (${systemConfig.negative_points_floor} pts) considering pending P2P transfers.`
+        );
+        return null;
+      }
+    }
     const initialStatus: TransactionRef['status'] = payload.ref_type === 'C2P' ? 'Open' : 'Pending';
     const issuerAuthUid = firebaseUser?.uid || currentProfile.uid;
 
@@ -3068,8 +3150,9 @@ export const AliradaProvider: React.FC<{ children: React.ReactNode }> = ({ child
       };
     }
 
-    const linkedOrderListing = ref.linked_listing_code
-      ? listings.find((l) => l.listing_code === ref?.linked_listing_code)
+    const normalizedLinkedCode = (ref.linked_listing_code || '').trim().toUpperCase();
+    const linkedOrderListing = normalizedLinkedCode
+      ? listings.find((l) => l.listing_code.trim().toUpperCase() === normalizedLinkedCode)
       : undefined;
 
     if (linkedOrderListing && getEffectiveListingAvailability(linkedOrderListing) === 'Deactivated') {
@@ -3089,6 +3172,18 @@ export const AliradaProvider: React.FC<{ children: React.ReactNode }> = ({ child
         ok: false,
         message: `Payment exceeds negative balance floor (${systemConfig.negative_points_floor} pts).`,
       };
+    }
+    if (ref.ref_type === 'P2P') {
+      const issuerMetrics = metricsMap[ref.issuer_uid];
+      if (
+        issuerMetrics &&
+        issuerMetrics.balance - settledPoints < systemConfig.negative_points_floor
+      ) {
+        return {
+          ok: false,
+          message: `Issuer ${ref.issuer_uid} lacks point headroom below the ${systemConfig.negative_points_floor} pts floor.`,
+        };
+      }
     }
 
     const origin =
@@ -3179,11 +3274,17 @@ export const AliradaProvider: React.FC<{ children: React.ReactNode }> = ({ child
     }
 
     // Execute post-payment website / embed API triggers safely
-    const triggerEventPayload = {
-      type: 'ALIRADA_C2P_PAYMENT_CONFIRMED',
+    const payerBalanceAfter =
+      ref.ref_type === 'C2P'
+        ? Number((myBalance - settledPoints).toFixed(2))
+        : Number((myBalance + settledPoints).toFixed(2));
+    const baseTriggerPayload = {
       ref_code: code,
       ref_type: ref.ref_type,
       points_amount: settledPoints,
+      unit_points: unitPoints,
+      quantity: cleanQty,
+      payer_balance_after: payerBalanceAfter,
       issuer_uid: ref.issuer_uid,
       payer_uid: currentProfile.universal_id,
       listing_code: ref.linked_listing_code || '',
@@ -3195,13 +3296,20 @@ export const AliradaProvider: React.FC<{ children: React.ReactNode }> = ({ child
     };
 
     if (typeof window !== 'undefined') {
-      try {
-        window.postMessage(triggerEventPayload, '*');
-        if (window.parent && window.parent !== window) {
-          window.parent.postMessage(triggerEventPayload, '*');
+      const dispatchTargets: Window[] = [window];
+      if (window.parent && window.parent !== window) dispatchTargets.push(window.parent);
+      if (window.opener && window.opener !== window) dispatchTargets.push(window.opener);
+
+      for (const target of dispatchTargets) {
+        try {
+          target.postMessage({ type: 'ALIRADA_C2P_PAID', ...baseTriggerPayload }, '*');
+          target.postMessage(
+            { type: 'ALIRADA_C2P_PAYMENT_CONFIRMED', ...baseTriggerPayload },
+            '*'
+          );
+        } catch {
+          // non-fatal postMessage error
         }
-      } catch {
-        // non-fatal postMessage error
       }
       if (ref.trigger_type === 'Webhook/Notification' && ref.trigger_payload) {
         const cleanHook = sanitizeExternalLink(ref.trigger_payload);
@@ -3210,7 +3318,7 @@ export const AliradaProvider: React.FC<{ children: React.ReactNode }> = ({ child
             method: 'POST',
             mode: 'no-cors',
             headers: { 'Content-Type': 'text/plain' },
-            body: JSON.stringify(triggerEventPayload),
+            body: JSON.stringify({ type: 'ALIRADA_C2P_PAID', ...baseTriggerPayload }),
           }).catch(() => {});
         }
       }
@@ -3423,6 +3531,10 @@ export const AliradaProvider: React.FC<{ children: React.ReactNode }> = ({ child
     notes
   ) => {
     if (!requireVerifiedAuth()) return false;
+    if (!Number.isFinite(pointsRequested) || pointsRequested <= 0 || !Number.isFinite(cashAmount) || cashAmount <= 0) {
+      pushToast('error', 'Points and cash amount must both be greater than zero.');
+      return false;
+    }
     const myBal = metricsMap[currentProfile.universal_id]?.balance ?? 0;
     if (myBal - pointsRequested < systemConfig.negative_points_floor) {
       pushToast('error', 'Insufficient point headroom to lock escrow.');
@@ -3511,6 +3623,16 @@ export const AliradaProvider: React.FC<{ children: React.ReactNode }> = ({ child
 
   const releasePointExchange: AliradaContextValue['releasePointExchange'] = async (exchangeId) => {
     if (!requireVerifiedAuth()) return false;
+    const exc = pointExchanges.find((e) => e.id === exchangeId);
+    if (!exc) return false;
+    if (exc.seller_uid.toUpperCase() !== currentProfile.universal_id.toUpperCase() && !isAdmin) {
+      pushToast('error', 'Only the exchange seller or administrator can release escrow.');
+      return false;
+    }
+    if (exc.status !== 'Proof Submitted') {
+      pushToast('warning', `Exchange ${exc.exchange_code} cannot be released while status is ${exc.status}.`);
+      return false;
+    }
     setLocalExchanges((prev) =>
       prev.map((e) => (e.id === exchangeId ? { ...e, status: 'Released' } : e))
     );
@@ -4122,6 +4244,8 @@ export const AliradaProvider: React.FC<{ children: React.ReactNode }> = ({ child
         dismissToast,
         pendingPayRef,
         clearPendingPayRef,
+        isEmbedMode,
+        exitEmbedMode,
         signInWithGoogle,
         signInEmail,
         registerEmail,

@@ -339,22 +339,34 @@ export const UserInspectorModal: React.FC = () => {
             <p className="text-lg font-mono-tabular font-semibold text-stone-900 dark:text-stone-100">
               {metrics?.balance ?? 0} pts
             </p>
-          </div>
-          <div>
-            <p className="text-xs text-stone-500 dark:text-stone-400">Hours Served</p>
-            <p className="text-lg font-mono-tabular font-semibold text-stone-900 dark:text-stone-100">
-              {metrics?.hours_served ?? 0}h
+            <p className="text-[11px] font-mono-tabular text-stone-500">
+              Carried {metrics?.carried_balance ?? 0}
             </p>
           </div>
           <div>
-            <p className="text-xs text-stone-500 dark:text-stone-400">Avg Hardship</p>
-            <p className="text-lg font-mono-tabular font-semibold text-stone-900 dark:text-stone-100">
-              {metrics?.average_hardship ?? 0} / 10
+            <p className="text-xs text-stone-500 dark:text-stone-400">Total Earned</p>
+            <p className="text-lg font-mono-tabular font-semibold text-emerald-700 dark:text-emerald-400">
+              +{metrics?.total_earned ?? 0} pts
+            </p>
+            <p className="text-[11px] font-mono-tabular text-stone-500">
+              Srv +{metrics?.score_earned ?? 0} · Cr +{metrics?.credits_in ?? 0}
             </p>
           </div>
           <div>
-            <p className="text-xs text-stone-500 dark:text-stone-400">Recognition</p>
+            <p className="text-xs text-stone-500 dark:text-stone-400">Total Deductions</p>
+            <p className="text-lg font-mono-tabular font-semibold text-rose-700 dark:text-rose-400">
+              -{metrics?.total_deductions ?? 0} pts
+            </p>
+            <p className="text-[11px] font-mono-tabular text-stone-500">
+              Led -{metrics?.deductions ?? 0} · Pen -{metrics?.penalty_score ?? 0}
+            </p>
+          </div>
+          <div>
+            <p className="text-xs text-stone-500 dark:text-stone-400">Service & Recognition</p>
             <p className="text-lg font-mono-tabular font-semibold text-stone-900 dark:text-stone-100">
+              {metrics?.hours_served ?? 0}h · H{metrics?.average_hardship ?? 0}
+            </p>
+            <p className="text-[11px] font-mono-tabular text-stone-500">
               +{metrics?.upward_votes ?? 0} / -{metrics?.compensate_votes ?? 0}
             </p>
           </div>

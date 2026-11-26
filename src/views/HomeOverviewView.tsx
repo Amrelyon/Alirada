@@ -136,46 +136,76 @@ export const HomeOverviewView: React.FC = () => {
       </section>
 
       {/* 4-Column Ledger KPI Strip */}
-      <section className="grid grid-cols-2 lg:grid-cols-4 gap-4">
-        <div className="bg-white dark:bg-[#12151B] border border-stone-200 dark:border-stone-800 rounded-xl p-5">
-          <p className="text-xs text-stone-500 dark:text-stone-400">Net Point Balance</p>
-          <p className="mt-1 text-2xl font-mono-tabular font-semibold text-stone-900 dark:text-stone-100">
-            {metrics?.balance ?? 0} <span className="text-sm font-normal text-stone-500">pts</span>
-          </p>
-          <p className="mt-1 text-xs text-stone-500 dark:text-stone-400 font-mono-tabular">
-            Floor: {systemConfig.negative_points_floor} pts
-          </p>
+      <section className="space-y-3">
+        <div className="grid grid-cols-2 lg:grid-cols-4 gap-4">
+          <div className="bg-white dark:bg-[#12151B] border border-stone-200 dark:border-stone-800 rounded-xl p-5">
+            <p className="text-xs text-stone-500 dark:text-stone-400">Net Point Balance</p>
+            <p className="mt-1 text-2xl font-mono-tabular font-semibold text-stone-900 dark:text-stone-100">
+              {metrics?.balance ?? 0} <span className="text-sm font-normal text-stone-500">pts</span>
+            </p>
+            <p className="mt-1 text-xs text-stone-500 dark:text-stone-400 font-mono-tabular">
+              Carried: {metrics?.carried_balance ?? 0} · Floor: {systemConfig.negative_points_floor} pts
+            </p>
+          </div>
+
+          <div className="bg-white dark:bg-[#12151B] border border-stone-200 dark:border-stone-800 rounded-xl p-5">
+            <p className="text-xs text-stone-500 dark:text-stone-400">Total Earned (Services + Credits)</p>
+            <p className="mt-1 text-2xl font-mono-tabular font-semibold text-emerald-700 dark:text-emerald-400">
+              +{metrics?.total_earned ?? 0} <span className="text-sm font-normal text-stone-500">pts</span>
+            </p>
+            <p className="mt-1 text-xs text-stone-500 dark:text-stone-400 font-mono-tabular">
+              Service: +{metrics?.score_earned ?? 0} · Credits: +{metrics?.credits_in ?? 0}
+            </p>
+          </div>
+
+          <div className="bg-white dark:bg-[#12151B] border border-stone-200 dark:border-stone-800 rounded-xl p-5">
+            <p className="text-xs text-stone-500 dark:text-stone-400">Total Deductions</p>
+            <p className="mt-1 text-2xl font-mono-tabular font-semibold text-rose-700 dark:text-rose-400">
+              -{metrics?.total_deductions ?? 0} <span className="text-sm font-normal text-stone-500">pts</span>
+            </p>
+            <p className="mt-1 text-xs text-stone-500 dark:text-stone-400 font-mono-tabular">
+              Ledger: -{metrics?.deductions ?? 0} · Penalty: -{metrics?.penalty_score ?? 0}
+            </p>
+          </div>
+
+          <div className="bg-white dark:bg-[#12151B] border border-stone-200 dark:border-stone-800 rounded-xl p-5">
+            <p className="text-xs text-stone-500 dark:text-stone-400">Hardship, Tier & Recognition</p>
+            <p className="mt-1 text-2xl font-mono-tabular font-semibold text-stone-900 dark:text-stone-100">
+              {metrics?.average_hardship ?? 0} <span className="text-sm font-normal text-stone-500">/ 10</span>
+            </p>
+            <p className="mt-1 text-xs text-[#B88B1E] dark:text-[#D4AF37] font-medium font-mono-tabular">
+              {metrics?.service_tier || 'Initiate'} · +{metrics?.upward_votes ?? 0}/-{metrics?.compensate_votes ?? 0} · {metrics?.today_hours ?? 0}h/{systemConfig.daily_max_hours}h
+            </p>
+          </div>
         </div>
 
-        <div className="bg-white dark:bg-[#12151B] border border-stone-200 dark:border-stone-800 rounded-xl p-5">
-          <p className="text-xs text-stone-500 dark:text-stone-400">Service Score Earned</p>
-          <p className="mt-1 text-2xl font-mono-tabular font-semibold text-stone-900 dark:text-stone-100">
-            +{metrics?.score_earned ?? 0} <span className="text-sm font-normal text-stone-500">pts</span>
-          </p>
-          <p className="mt-1 text-xs text-stone-500 dark:text-stone-400 font-mono-tabular">
-            {metrics?.hours_served ?? 0}h served · Today {metrics?.today_hours ?? 0}h/{systemConfig.daily_max_hours}h
-          </p>
-        </div>
-
-        <div className="bg-white dark:bg-[#12151B] border border-stone-200 dark:border-stone-800 rounded-xl p-5">
-          <p className="text-xs text-stone-500 dark:text-stone-400">Average Hardship & Tier</p>
-          <p className="mt-1 text-2xl font-mono-tabular font-semibold text-stone-900 dark:text-stone-100">
-            {metrics?.average_hardship ?? 0} <span className="text-sm font-normal text-stone-500">/ 10</span>
-          </p>
-          <p className="mt-1 text-xs text-[#B88B1E] dark:text-[#D4AF37] font-medium">
-            {metrics?.service_tier || 'Initiate'}
-          </p>
-        </div>
-
-        <div className="bg-white dark:bg-[#12151B] border border-stone-200 dark:border-stone-800 rounded-xl p-5">
-          <p className="text-xs text-stone-500 dark:text-stone-400">Peer Recognition</p>
-          <p className="mt-1 text-2xl font-mono-tabular font-semibold text-stone-900 dark:text-stone-100">
-            +{metrics?.upward_votes ?? 0} / -{metrics?.compensate_votes ?? 0}
-          </p>
-          <p className="mt-1 text-xs text-stone-500 dark:text-stone-400">
-            Deductions: {metrics?.deductions ?? 0} pts
-          </p>
-        </div>
+        {metrics && (
+          <div className="bg-white dark:bg-[#12151B] border border-stone-200 dark:border-stone-800 rounded-xl px-5 py-3.5 text-xs flex flex-col lg:flex-row lg:items-center justify-between gap-2">
+            <div className="flex flex-wrap items-center gap-x-4 gap-y-1 text-stone-600 dark:text-stone-300 font-mono-tabular">
+              <span className="font-semibold text-stone-900 dark:text-stone-100">
+                Earnings Breakdown:
+              </span>
+              <span>Services +{metrics.earning_breakdown.services}</span>
+              <span>Sales +{metrics.earning_breakdown.orders_sold}</span>
+              <span>Dividends +{metrics.earning_breakdown.dividends}</span>
+              <span>C2P/P2P +{metrics.earning_breakdown.c2p_p2p_in}</span>
+              <span>Batches +{metrics.earning_breakdown.batch_in}</span>
+              <span>Exchange +{metrics.earning_breakdown.exchange_in}</span>
+            </div>
+            <div className="flex flex-wrap items-center gap-x-4 gap-y-1 text-stone-600 dark:text-stone-300 font-mono-tabular">
+              <span className="font-semibold text-stone-900 dark:text-stone-100">
+                Deductions Breakdown:
+              </span>
+              <span>Requested -{metrics.deduction_breakdown.requested_servants}</span>
+              <span>Orders -{metrics.deduction_breakdown.orders_spent}</span>
+              <span>Invested -{metrics.deduction_breakdown.investments_out}</span>
+              <span>C2P/P2P -{metrics.deduction_breakdown.c2p_p2p_out}</span>
+              <span>Batches -{metrics.deduction_breakdown.batch_out}</span>
+              <span>Escrow -{metrics.deduction_breakdown.exchange_escrow_out}</span>
+              <span>Penalty -{metrics.deduction_breakdown.penalty}</span>
+            </div>
+          </div>
+        )}
       </section>
 
       {/* Unread Notices */}

@@ -162,6 +162,8 @@ export const GovernancePeopleView: React.FC = () => {
                   <th className="py-2 pr-3 text-right font-medium">Hours</th>
                   <th className="py-2 pr-3 text-right font-medium">Avg Hardship</th>
                   <th className="py-2 pr-3 text-right font-medium">Recognition</th>
+                  <th className="py-2 pr-3 text-right font-medium">Earned</th>
+                  <th className="py-2 pr-3 text-right font-medium">Deducted</th>
                   <th className="py-2 pr-3 text-right font-medium">Balance</th>
                   <th className="py-2 text-right font-medium">Status</th>
                 </tr>
@@ -182,6 +184,12 @@ export const GovernancePeopleView: React.FC = () => {
                       <td className="py-3 pr-3 text-right font-mono-tabular">{m?.average_hardship ?? 0}</td>
                       <td className="py-3 pr-3 text-right font-mono-tabular">
                         +{m?.upward_votes ?? 0} / -{m?.compensate_votes ?? 0}
+                      </td>
+                      <td className="py-3 pr-3 text-right font-mono-tabular text-emerald-700 dark:text-emerald-400">
+                        +{m?.total_earned ?? 0}
+                      </td>
+                      <td className="py-3 pr-3 text-right font-mono-tabular text-rose-700 dark:text-rose-400">
+                        -{m?.total_deductions ?? 0}
                       </td>
                       <td className="py-3 pr-3 text-right font-mono-tabular font-semibold text-stone-900 dark:text-stone-100">
                         {m?.balance ?? 0} pts

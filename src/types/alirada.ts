@@ -476,14 +476,34 @@ export interface LedgerMetrics {
   hours_served: number;
   score_earned: number;
   credits_in: number;
+  total_earned: number;
   services_received: number;
   deductions: number;
   penalty_score: number;
+  total_deductions: number;
   carried_balance: number;
+  raw_balance: number;
   balance: number;
   average_hardship: number;
   service_tier: string;
   upward_votes: number;
   compensate_votes: number;
   today_hours: number;
+  earning_breakdown: {
+    services: number;
+    orders_sold: number;
+    dividends: number;
+    c2p_p2p_in: number;
+    batch_in: number;
+    exchange_in: number;
+  };
+  deduction_breakdown: {
+    requested_servants: number;
+    orders_spent: number;
+    investments_out: number;
+    c2p_p2p_out: number;
+    batch_out: number;
+    exchange_escrow_out: number;
+    penalty: number;
+  };
 }

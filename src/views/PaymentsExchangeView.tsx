@@ -4,13 +4,16 @@ import { getEffectiveListingAvailability, useAlirada } from '../context/AliradaC
 import { BatchRecipient, PaymentModel, TransactionRef, TriggerType } from '../types/alirada';
 import { UserAvatar } from '../components/UserAvatar';
 import { buildUidUnifiedTransactions } from '../lib/ledgerMath';
+import { encodeWidgetPreview } from '../lib/widgetPreview';
 
 export const PaymentsExchangeView: React.FC = () => {
   const {
     currentProfile,
     isAdmin,
     profiles,
+    metricsMap,
     listings,
+    projects,
     serviceLogs,
     deductionLogs,
     orders,
@@ -84,6 +87,8 @@ export const PaymentsExchangeView: React.FC = () => {
   const linkedListingDeactivated = Boolean(
     selectedLinkedListing && getEffectiveListingAvailability(selectedLinkedListing) === 'Deactivated'
   );
+
+  const txLookupMetrics = metricsMap[txLookupUid];
 
   const unifiedTransactions = useMemo(
     () =>
@@ -193,10 +198,23 @@ export const PaymentsExchangeView: React.FC = () => {
   };
 
   const buildWidgetSnippet = (ref: TransactionRef) => {
-    const directUrl = `${window.location.origin}/?pay_ref=${encodeURIComponent(ref.ref_code)}`;
+    const linked = ref.linked_listing_code
+      ? listings.find(
+          (l) => l.listing_code.trim().toUpperCase() === ref.linked_listing_code?.trim().toUpperCase()
+        )
+      : undefined;
+    const linkedProj = linked?.linked_project_id
+      ? projects.find((p) => p.id === linked.linked_project_id)
+      : undefined;
+    const wp = encodeWidgetPreview(ref, linked, linkedProj?.name);
+    const wpSuffix = wp ? `&wp=${encodeURIComponent(wp)}` : '';
+    const directUrl = `${window.location.origin}/?pay_ref=${encodeURIComponent(ref.ref_code)}${wpSuffix}`;
     const prodUrl = `https://alirada.com/?pay_ref=${encodeURIComponent(ref.ref_code)}`;
-    const html = `<div style="border:1px solid #d4af37;padding:16px;border-radius:10px;max-width:360px;font-family:sans-serif">\n  <strong>${ref.widget_name || 'Alirada C2P Checkout'}</strong>\n  <p style="margin:6px 0;font-size:13px">${ref.points_amount} pts (${ref.payment_model}) · Ref ${ref.ref_code}</p>\n  <a href="${directUrl}" target="_blank" rel="noopener noreferrer" style="display:inline-block;padding:8px 14px;background:#b88b1e;color:#fff;text-decoration:none;border-radius:6px;font-size:13px">Pay with Alirada</a>\n</div>\n<!-- Embedded iframe + API listener:\n<iframe src="${prodUrl}&embed=1" width="100%" height="560" style="border:0"></iframe>\n<script>window.addEventListener('message', (e) => { if (e.data?.type === 'ALIRADA_C2P_PAID') console.log('Paid:', e.data); });</script>\n-->`;
-    return { directUrl, prodUrl, html };
+    const embedUrl = `https://alirada.com/?pay_ref=${encodeURIComponent(ref.ref_code)}&embed=1${wpSuffix}`;
+    const localEmbedUrl = `${window.location.origin}/?pay_ref=${encodeURIComponent(ref.ref_code)}&embed=1${wpSuffix}`;
+    const iframeId = `alirada-c2p-${ref.ref_code.toLowerCase().replace(/[^a-z0-9-]/g, '')}`;
+    const html = `<iframe\n  id="${iframeId}"\n  src="${embedUrl}"\n  title="${(linked?.title || ref.widget_name || 'Alirada C2P Checkout').replace(/"/g, '&quot;')}"\n  width="100%"\n  height="680"\n  style="border:0;max-width:560px;border-radius:12px;overflow:hidden"\n  allow="clipboard-write"\n></iframe>\n<script>\nwindow.addEventListener('message', function (e) {\n  if (!e.data || e.data.ref_code !== '${ref.ref_code}') return;\n  if (e.data.type === 'ALIRADA_C2P_HEIGHT' && e.data.height) {\n    var el = document.getElementById('${iframeId}');\n    if (el) el.style.height = e.data.height + 'px';\n  }\n  if (e.data.type === 'ALIRADA_C2P_PAID' || e.data.type === 'ALIRADA_C2P_PAYMENT_CONFIRMED') {\n    console.log('Alirada C2P Paid:', e.data);\n  }\n});\n</script>`;
+    return { directUrl, prodUrl, embedUrl, localEmbedUrl, html };
   };
 
   return (
@@ -413,9 +431,17 @@ export const PaymentsExchangeView: React.FC = () => {
                   <div className="space-y-2 pt-2 border-t border-stone-200 dark:border-stone-800">
                     <div className="flex items-center justify-between flex-wrap gap-2">
                       <span className="inline-flex items-center gap-1 font-medium">
-                        <Code2 className="w-3.5 h-3.5" /> Embeddable Widget & API Snippet
+                        <Code2 className="w-3.5 h-3.5" /> External Website Embed Widget & API Snippet
                       </span>
-                      <div className="flex items-center gap-3">
+                      <div className="flex items-center gap-3 flex-wrap">
+                        <a
+                          href={buildWidgetSnippet(issuedRef).localEmbedUrl}
+                          target="_blank"
+                          rel="noopener noreferrer"
+                          className="text-xs text-emerald-700 dark:text-emerald-400 hover:underline inline-flex items-center gap-1"
+                        >
+                          <ExternalLink className="w-3 h-3" /> Open Embed View
+                        </a>
                         <button
                           type="button"
                           onClick={() => copyText('payurl', buildWidgetSnippet(issuedRef).prodUrl)}
@@ -514,14 +540,29 @@ export const PaymentsExchangeView: React.FC = () => {
                       </div>
                       <div className="flex items-center gap-2 flex-wrap shrink-0">
                         {ref.ref_type === 'C2P' && (ref.status === 'Open' || ref.status === 'Pending') && (
-                          <button
-                            type="button"
-                            onClick={() => setActiveCheckoutRefCode(ref.ref_code)}
-                            className="px-2.5 py-1 rounded-md bg-[#B88B1E] dark:bg-[#D4AF37] text-white dark:text-stone-950 font-medium inline-flex items-center gap-1"
-                          >
-                            <ExternalLink className="w-3 h-3" />
-                            {canPay ? 'Pay Checkout' : 'Preview Card'}
-                          </button>
+                          <>
+                            <button
+                              type="button"
+                              onClick={() => setActiveCheckoutRefCode(ref.ref_code)}
+                              className="px-2.5 py-1 rounded-md bg-[#B88B1E] dark:bg-[#D4AF37] text-white dark:text-stone-950 font-medium inline-flex items-center gap-1"
+                            >
+                              <ExternalLink className="w-3 h-3" />
+                              {canPay ? 'Pay Checkout' : 'Preview Card'}
+                            </button>
+                            <button
+                              type="button"
+                              onClick={() => copyText(`embed_${ref.id}`, buildWidgetSnippet(ref).html)}
+                              className="px-2 py-1 rounded-md border border-stone-300 dark:border-stone-700 text-stone-700 dark:text-stone-200 hover:bg-stone-100 dark:hover:bg-stone-800 inline-flex items-center gap-1"
+                              title="Copy External Website Embed HTML & API Listener"
+                            >
+                              {copiedId === `embed_${ref.id}` ? (
+                                <Check className="w-3 h-3 text-emerald-500" />
+                              ) : (
+                                <Code2 className="w-3 h-3" />
+                              )}
+                              Embed Code
+                            </button>
+                          </>
                         )}
                         {ref.ref_type === 'P2P' && canPay && (
                           <button
@@ -529,7 +570,7 @@ export const PaymentsExchangeView: React.FC = () => {
                             onClick={() => redeemTransactionRef(ref.ref_code)}
                             className="px-2.5 py-1 rounded-md bg-[#B88B1E] dark:bg-[#D4AF37] text-white dark:text-stone-950 font-medium"
                           >
-                            Pay
+                            Redeem (+{ref.points_amount} pts)
                           </button>
                         )}
                         {canDeactivateOrCancel && (
@@ -887,6 +928,35 @@ export const PaymentsExchangeView: React.FC = () => {
               </select>
             </div>
           </div>
+
+          {txLookupMetrics && (
+            <div className="grid grid-cols-2 sm:grid-cols-4 gap-3 p-3 rounded-lg bg-stone-50 dark:bg-[#0B0D10] border border-stone-200 dark:border-stone-800 text-xs font-mono-tabular">
+              <div>
+                <span className="block text-[11px] text-stone-500">Carried Balance</span>
+                <span className="font-semibold text-stone-900 dark:text-stone-100">
+                  {txLookupMetrics.carried_balance} pts
+                </span>
+              </div>
+              <div>
+                <span className="block text-[11px] text-stone-500">Total Earned</span>
+                <span className="font-semibold text-emerald-700 dark:text-emerald-400">
+                  +{txLookupMetrics.total_earned} pts
+                </span>
+              </div>
+              <div>
+                <span className="block text-[11px] text-stone-500">Total Deductions</span>
+                <span className="font-semibold text-rose-700 dark:text-rose-400">
+                  -{txLookupMetrics.total_deductions} pts
+                </span>
+              </div>
+              <div>
+                <span className="block text-[11px] text-stone-500">Net Balance</span>
+                <span className="font-semibold text-stone-900 dark:text-stone-100">
+                  {txLookupMetrics.balance} pts
+                </span>
+              </div>
+            </div>
+          )}
 
           {unifiedTransactions.length === 0 ? (
             <p className="text-xs text-stone-500 py-8 text-center">

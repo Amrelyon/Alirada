@@ -23,13 +23,25 @@ export function deriveServiceTier(scoreEarned: number, upwardVotes: number): str
   return 'Initiate';
 }
 
-export function isC2POrderConnectedRef(r: TransactionRef): boolean {
-  return (
-    r.ref_type === 'C2P' &&
-    (Boolean(r.linked_listing_code) ||
-      r.trigger_type === 'Order Creation' ||
-      Boolean(r.linked_order_id))
-  );
+function normUid(uid?: string): string {
+  return (uid || '').trim().toUpperCase();
+}
+
+function round2(value: number): number {
+  return Number((Number.isFinite(value) ? value : 0).toFixed(2));
+}
+
+export function isC2POrderConnectedRef(r: TransactionRef, orders?: Order[]): boolean {
+  if (r.ref_type !== 'C2P') return false;
+  if (orders) {
+    const orderIds = new Set(orders.map((o) => o.id));
+    if (r.linked_order_id && orderIds.has(r.linked_order_id)) return true;
+    if ((r.c2p_settlements || []).some((s) => Boolean(s.order_id && orderIds.has(s.order_id)))) {
+      return true;
+    }
+    return orders.some((o) => o.c2p_ref_code === r.ref_code);
+  }
+  return Boolean(r.linked_listing_code || r.linked_order_id);
 }
 
 export function computeUserLedgerMetrics(
@@ -46,138 +58,218 @@ export function computeUserLedgerMetrics(
   todayIsoDate: string
 ): LedgerMetrics {
   const uid = profile.universal_id;
+  const uidNorm = normUid(uid);
 
-  const givenLogs = serviceLogs.filter((l) => l.provider_uid === uid);
-  const receivedLogs = serviceLogs.filter((l) => l.recipient_uid === uid);
+  const givenLogs = serviceLogs.filter((l) => normUid(l.provider_uid) === uidNorm);
+  const receivedLogs = serviceLogs.filter((l) => normUid(l.recipient_uid) === uidNorm);
   const services_given = givenLogs.length;
-  const hours_served = givenLogs.reduce((acc, l) => acc + l.hours, 0);
-  const score_earned = givenLogs.reduce((acc, l) => acc + l.final_score, 0);
+  const hours_served = givenLogs.reduce((acc, l) => acc + (Number(l.hours) || 0), 0);
+  const score_earned = round2(
+    givenLogs.reduce((acc, l) => acc + (Number(l.final_score) || 0), 0)
+  );
   const today_hours = givenLogs
     .filter((l) => l.logged_date === todayIsoDate)
-    .reduce((acc, l) => acc + l.hours, 0);
+    .reduce((acc, l) => acc + (Number(l.hours) || 0), 0);
 
   const average_hardship =
     services_given > 0
-      ? Number((givenLogs.reduce((acc, l) => acc + l.hardship, 0) / services_given).toFixed(2))
+      ? round2(
+          givenLogs.reduce((acc, l) => acc + (Number(l.hardship) || 0), 0) / services_given
+        )
       : 0;
 
-  const requestedDeductions = deductionLogs
-    .filter((d) => d.requested_servant_uid === uid)
-    .reduce((acc, d) => acc + d.deducted_score, 0);
+  // Exclude Disputed servant deduction entries
+  const requestedDeductions = round2(
+    deductionLogs
+      .filter((d) => normUid(d.requested_servant_uid) === uidNorm && d.status !== 'Disputed')
+      .reduce((acc, d) => acc + (Number(d.deducted_score) || 0), 0)
+  );
 
-  const ordersSpent = orders
-    .filter((o) => o.buyer_uid === uid && o.order_status !== 'Rejected')
-    .reduce((acc, o) => acc + o.total_points, 0);
+  // Exclude Rejected orders for buyer spend; credit seller strictly when Delivered & not Rejected
+  const ordersSpent = round2(
+    orders
+      .filter(
+        (o) =>
+          normUid(o.buyer_uid) === uidNorm &&
+          o.order_status !== 'Rejected' &&
+          o.delivery_status !== 'Rejected'
+      )
+      .reduce((acc, o) => acc + (Number(o.total_points) || 0), 0)
+  );
 
-  const ordersEarned = orders
-    .filter((o) => o.seller_uid === uid && o.delivery_status === 'Delivered')
-    .reduce((acc, o) => acc + o.total_points, 0);
+  const ordersEarned = round2(
+    orders
+      .filter(
+        (o) =>
+          normUid(o.seller_uid) === uidNorm &&
+          o.order_status !== 'Rejected' &&
+          o.delivery_status === 'Delivered'
+      )
+      .reduce((acc, o) => acc + (Number(o.total_points) || 0), 0)
+  );
 
-  const investmentsOut = investments
-    .filter((i) => i.investor_uid === uid && i.status !== 'Cancelled')
-    .reduce((acc, i) => acc + i.invested_points, 0);
+  const investmentsOut = round2(
+    investments
+      .filter((i) => normUid(i.investor_uid) === uidNorm && i.status !== 'Cancelled')
+      .reduce((acc, i) => acc + (Number(i.invested_points) || 0), 0)
+  );
 
-  const dividendsIn = investments
-    .filter((i) => i.investor_uid === uid)
-    .reduce((acc, i) => acc + i.dividends_earned, 0);
+  const dividendsIn = round2(
+    investments
+      .filter((i) => normUid(i.investor_uid) === uidNorm)
+      .reduce((acc, i) => acc + (Number(i.dividends_earned) || 0), 0)
+  );
 
   // P2P settles directly via status === 'Confirmed'.
-  // C2P connected to a listing/order settles through Orders (never double-counted here).
-  // Standalone C2P settles via c2p_settlements[] (or fallback to Confirmed if no settlements array).
+  // C2P settlements backed by an actual Order settle via Orders (never double-counted).
+  // Standalone C2P settlements settle via c2p_settlements[] (or fallback Confirmed if no settlements array).
+  const orderIds = new Set(orders.map((o) => o.id));
   let refsOut = 0;
   let refsIn = 0;
 
   for (const r of transactionRefs) {
     if (r.ref_type === 'P2P') {
       if (r.status === 'Confirmed') {
-        if (r.issuer_uid === uid) refsOut += r.points_amount;
-        if (r.counterparty_uid === uid) refsIn += r.points_amount;
+        const amt = Number(r.points_amount) || 0;
+        if (normUid(r.issuer_uid) === uidNorm) refsOut += amt;
+        if (normUid(r.counterparty_uid) === uidNorm) refsIn += amt;
       }
-      continue;
-    }
-
-    if (isC2POrderConnectedRef(r)) {
-      // Settled strictly via linked Order records to avoid double deduction
       continue;
     }
 
     const settlements = r.c2p_settlements || [];
     if (settlements.length > 0) {
       for (const s of settlements) {
-        if (s.payer_uid === uid) refsOut += s.points_amount;
-        if (r.issuer_uid === uid) refsIn += s.points_amount;
+        const amt = Number(s.points_amount) || 0;
+        const settledViaOrder = Boolean(
+          (s.order_id && orderIds.has(s.order_id)) ||
+            (!s.order_id && r.linked_order_id && orderIds.has(r.linked_order_id)) ||
+            (!s.order_id &&
+              orders.some(
+                (o) =>
+                  o.c2p_ref_code === r.ref_code &&
+                  normUid(o.buyer_uid) === normUid(s.payer_uid) &&
+                  Math.abs((Number(o.total_points) || 0) - amt) < 0.01
+              ))
+        );
+        if (settledViaOrder) continue;
+        if (normUid(s.payer_uid) === uidNorm) refsOut += amt;
+        if (normUid(r.issuer_uid) === uidNorm) refsIn += amt;
       }
     } else if (r.status === 'Confirmed') {
-      if (r.counterparty_uid === uid) refsOut += r.points_amount;
-      if (r.issuer_uid === uid) refsIn += r.points_amount;
+      const hasMatchingOrder = Boolean(
+        (r.linked_order_id && orderIds.has(r.linked_order_id)) ||
+          orders.some((o) => o.c2p_ref_code === r.ref_code)
+      );
+      if (hasMatchingOrder) continue;
+      const amt = Number(r.points_amount) || 0;
+      if (normUid(r.counterparty_uid) === uidNorm) refsOut += amt;
+      if (normUid(r.issuer_uid) === uidNorm) refsIn += amt;
     }
   }
+  refsOut = round2(refsOut);
+  refsIn = round2(refsIn);
 
-  const batchOut = batchPayments
-    .filter((b) => b.creator_uid === uid && b.send_count > 0)
-    .reduce(
-      (acc, b) =>
-        acc + b.send_count * b.recipients.reduce((s, r) => s + r.points, 0),
-      0
-    );
+  const batchOut = round2(
+    batchPayments
+      .filter((b) => normUid(b.creator_uid) === uidNorm && (Number(b.send_count) || 0) > 0)
+      .reduce(
+        (acc, b) =>
+          acc +
+          (Number(b.send_count) || 0) *
+            b.recipients.reduce((s, r) => s + (Number(r.points) || 0), 0),
+        0
+      )
+  );
 
-  const batchIn = batchPayments
-    .filter((b) => b.send_count > 0)
-    .reduce((acc, b) => {
-      const rec = b.recipients.find((r) => r.uid === uid);
-      return acc + (rec ? rec.points * b.send_count : 0);
-    }, 0);
+  // Sum ALL matching recipient rows (fixes multi-row loss when same UID appears multiple times)
+  const batchIn = round2(
+    batchPayments
+      .filter((b) => (Number(b.send_count) || 0) > 0)
+      .reduce((acc, b) => {
+        const matchedTotal = b.recipients
+          .filter((r) => normUid(r.uid) === uidNorm)
+          .reduce((s, r) => s + (Number(r.points) || 0), 0);
+        return acc + matchedTotal * (Number(b.send_count) || 0);
+      }, 0)
+  );
 
   // Deactivated or Cancelled exchanges release escrow back to seller
-  const exchangeOut = pointExchanges
-    .filter(
-      (e) =>
-        e.seller_uid === uid &&
-        (e.status === 'Escrow Locked' || e.status === 'Proof Submitted' || e.status === 'Released')
-    )
-    .reduce((acc, e) => acc + e.points_requested, 0);
-
-  const exchangeIn = pointExchanges
-    .filter((e) => e.buyer_uid === uid && e.status === 'Released')
-    .reduce((acc, e) => acc + e.points_requested, 0);
-
-  const deductions = Number(
-    (requestedDeductions + ordersSpent + investmentsOut + refsOut + batchOut + exchangeOut).toFixed(2)
+  const exchangeOut = round2(
+    pointExchanges
+      .filter(
+        (e) =>
+          normUid(e.seller_uid) === uidNorm &&
+          (e.status === 'Escrow Locked' ||
+            e.status === 'Proof Submitted' ||
+            e.status === 'Released')
+      )
+      .reduce((acc, e) => acc + (Number(e.points_requested) || 0), 0)
   );
-  const credits_in = Number((ordersEarned + dividendsIn + refsIn + batchIn + exchangeIn).toFixed(2));
 
-  const rawBalance =
-    score_earned +
-    credits_in -
-    deductions -
-    profile.penalty_score +
-    profile.carried_balance;
+  const exchangeIn = round2(
+    pointExchanges
+      .filter((e) => normUid(e.buyer_uid) === uidNorm && e.status === 'Released')
+      .reduce((acc, e) => acc + (Number(e.points_requested) || 0), 0)
+  );
 
-  const balance = Number(Math.max(config.negative_points_floor, rawBalance).toFixed(2));
+  const penaltyScore = round2(Number(profile.penalty_score) || 0);
+  const carriedBalance = round2(Number(profile.carried_balance) || 0);
+
+  const deductions = round2(
+    requestedDeductions + ordersSpent + investmentsOut + refsOut + batchOut + exchangeOut
+  );
+  const credits_in = round2(ordersEarned + dividendsIn + refsIn + batchIn + exchangeIn);
+
+  const total_earned = round2(score_earned + credits_in);
+  const total_deductions = round2(deductions + penaltyScore);
+
+  const raw_balance = round2(carriedBalance + total_earned - total_deductions);
+  const balance = round2(Math.max(config.negative_points_floor, raw_balance));
 
   const upward_votes = recognitionVotes.filter(
-    (v) => v.target_uid === uid && v.direction === 'UPWARD'
+    (v) => normUid(v.target_uid) === uidNorm && v.direction === 'UPWARD'
   ).length;
   const compensate_votes = recognitionVotes.filter(
-    (v) => v.target_uid === uid && v.direction === 'COMPENSATE'
+    (v) => normUid(v.target_uid) === uidNorm && v.direction === 'COMPENSATE'
   ).length;
 
   return {
     universal_id: uid,
     services_given,
-    hours_served: Number(hours_served.toFixed(2)),
-    score_earned: Number(score_earned.toFixed(2)),
+    hours_served: round2(hours_served),
+    score_earned,
     credits_in,
+    total_earned,
     services_received: receivedLogs.length,
     deductions,
-    penalty_score: profile.penalty_score,
-    carried_balance: profile.carried_balance,
+    penalty_score: penaltyScore,
+    total_deductions,
+    carried_balance: carriedBalance,
+    raw_balance,
     balance,
     average_hardship,
     service_tier: deriveServiceTier(score_earned, upward_votes),
     upward_votes,
     compensate_votes,
-    today_hours: Number(today_hours.toFixed(2)),
+    today_hours: round2(today_hours),
+    earning_breakdown: {
+      services: score_earned,
+      orders_sold: ordersEarned,
+      dividends: dividendsIn,
+      c2p_p2p_in: refsIn,
+      batch_in: batchIn,
+      exchange_in: exchangeIn,
+    },
+    deduction_breakdown: {
+      requested_servants: requestedDeductions,
+      orders_spent: ordersSpent,
+      investments_out: investmentsOut,
+      c2p_p2p_out: refsOut,
+      batch_out: batchOut,
+      exchange_escrow_out: exchangeOut,
+      penalty: penaltyScore,
+    },
   };
 }
 
@@ -588,13 +680,14 @@ export function buildUidUnifiedTransactions(
     pointExchanges: PointExchange[];
   }
 ): UnifiedTransactionRecord[] {
-  const normalized = uid.trim().toUpperCase();
+  const normalized = normUid(uid);
   if (!normalized) return [];
 
+  const orderById = new Map(data.orders.map((o) => [o.id, o]));
   const rows: UnifiedTransactionRecord[] = [];
 
   for (const l of data.serviceLogs) {
-    if (l.provider_uid.toUpperCase() === normalized) {
+    if (normUid(l.provider_uid) === normalized) {
       rows.push({
         id: `srv_p_${l.id}`,
         code: l.log_number,
@@ -608,7 +701,7 @@ export function buildUidUnifiedTransactions(
         created_at: l.created_at,
       });
     }
-    if (l.recipient_uid.toUpperCase() === normalized) {
+    if (normUid(l.recipient_uid) === normalized) {
       rows.push({
         id: `srv_r_${l.id}`,
         code: l.log_number,
@@ -625,7 +718,7 @@ export function buildUidUnifiedTransactions(
   }
 
   for (const d of data.deductionLogs) {
-    if (d.requester_uid.toUpperCase() === normalized) {
+    if (normUid(d.requester_uid) === normalized) {
       rows.push({
         id: `ded_i_${d.id}`,
         code: d.request_number,
@@ -639,7 +732,7 @@ export function buildUidUnifiedTransactions(
         created_at: d.created_at,
       });
     }
-    if (d.requested_servant_uid.toUpperCase() === normalized) {
+    if (normUid(d.requested_servant_uid) === normalized) {
       rows.push({
         id: `ded_r_${d.id}`,
         code: d.request_number,
@@ -647,16 +740,17 @@ export function buildUidUnifiedTransactions(
         role: 'Receiver / Counterparty',
         counterpartyUid: d.requester_uid,
         amount: d.deducted_score,
-        direction: '-',
+        direction: d.status === 'Disputed' ? 'Escrow' : '-',
         status: d.status,
-        summary: `Servant deduction recorded`,
+        summary: d.status === 'Disputed' ? 'Servant deduction (Disputed)' : 'Servant deduction recorded',
         created_at: d.created_at,
       });
     }
   }
 
   for (const o of data.orders) {
-    if (o.buyer_uid.toUpperCase() === normalized) {
+    const isRejected = o.order_status === 'Rejected' || o.delivery_status === 'Rejected';
+    if (normUid(o.buyer_uid) === normalized) {
       rows.push({
         id: `ord_b_${o.id}`,
         code: o.order_number,
@@ -664,13 +758,13 @@ export function buildUidUnifiedTransactions(
         role: 'Issuer / Sender',
         counterpartyUid: o.seller_uid,
         amount: o.total_points,
-        direction: o.order_status === 'Rejected' ? 'Escrow' : '-',
+        direction: isRejected ? 'Escrow' : '-',
         status: `${o.order_status} · ${o.delivery_status}`,
         summary: `Order ${o.listing_code} × ${o.quantity}${o.c2p_ref_code ? ` · ${o.c2p_ref_code}` : ''}`,
         created_at: o.created_at,
       });
     }
-    if (o.seller_uid.toUpperCase() === normalized) {
+    if (normUid(o.seller_uid) === normalized) {
       rows.push({
         id: `ord_s_${o.id}`,
         code: o.order_number,
@@ -678,7 +772,7 @@ export function buildUidUnifiedTransactions(
         role: 'Receiver / Counterparty',
         counterpartyUid: o.buyer_uid,
         amount: o.total_points,
-        direction: o.delivery_status === 'Delivered' ? '+' : 'Escrow',
+        direction: !isRejected && o.delivery_status === 'Delivered' ? '+' : 'Escrow',
         status: `${o.order_status} · ${o.delivery_status}`,
         summary: `Sale ${o.listing_code} × ${o.quantity}${o.c2p_ref_code ? ` · ${o.c2p_ref_code}` : ''}`,
         created_at: o.created_at,
@@ -688,7 +782,7 @@ export function buildUidUnifiedTransactions(
 
   for (const r of data.transactionRefs) {
     if (r.ref_type === 'P2P') {
-      if (r.issuer_uid.toUpperCase() === normalized) {
+      if (normUid(r.issuer_uid) === normalized) {
         rows.push({
           id: `ref_i_${r.id}`,
           code: r.ref_code,
@@ -702,7 +796,7 @@ export function buildUidUnifiedTransactions(
           created_at: r.created_at,
         });
       }
-      if (r.counterparty_uid?.toUpperCase() === normalized) {
+      if (normUid(r.counterparty_uid) === normalized) {
         rows.push({
           id: `ref_c_${r.id}`,
           code: r.ref_code,
@@ -720,7 +814,18 @@ export function buildUidUnifiedTransactions(
       const settlements = r.c2p_settlements || [];
       if (settlements.length > 0) {
         settlements.forEach((s, idx) => {
-          if (r.issuer_uid.toUpperCase() === normalized) {
+          const linkedOrd =
+            (s.order_id ? orderById.get(s.order_id) : undefined) ||
+            (!s.order_id && r.linked_order_id ? orderById.get(r.linked_order_id) : undefined) ||
+            (!s.order_id
+              ? data.orders.find(
+                  (o) =>
+                    o.c2p_ref_code === r.ref_code &&
+                    normUid(o.buyer_uid) === normUid(s.payer_uid) &&
+                    Math.abs((Number(o.total_points) || 0) - (Number(s.points_amount) || 0)) < 0.01
+                )
+              : undefined);
+          if (normUid(r.issuer_uid) === normalized) {
             rows.push({
               id: `c2p_i_${r.id}_${idx}`,
               code: r.ref_code,
@@ -728,13 +833,15 @@ export function buildUidUnifiedTransactions(
               role: 'Receiver / Counterparty',
               counterpartyUid: s.payer_uid,
               amount: s.points_amount,
-              direction: '+',
-              status: `${r.status} · Settlement #${idx + 1}`,
-              summary: `${r.widget_name || 'C2P Widget'}${s.order_number ? ` · ${s.order_number}` : ''}`,
+              direction: linkedOrd ? 'Escrow' : '+',
+              status: linkedOrd
+                ? `Via ${linkedOrd.order_number} · ${linkedOrd.delivery_status}`
+                : `${r.status} · Settlement #${idx + 1}`,
+              summary: `${r.widget_name || 'C2P Widget'}${linkedOrd ? ` · Counted under ${linkedOrd.order_number}` : ''}`,
               created_at: s.paid_at,
             });
           }
-          if (s.payer_uid.toUpperCase() === normalized) {
+          if (normUid(s.payer_uid) === normalized) {
             rows.push({
               id: `c2p_p_${r.id}_${idx}`,
               code: r.ref_code,
@@ -742,15 +849,18 @@ export function buildUidUnifiedTransactions(
               role: 'Issuer / Sender',
               counterpartyUid: r.issuer_uid,
               amount: s.points_amount,
-              direction: '-',
-              status: `Paid · ${r.status}`,
-              summary: `${r.widget_name || 'C2P Checkout'}${s.order_number ? ` · ${s.order_number}` : ''}`,
+              direction: linkedOrd ? 'Escrow' : '-',
+              status: linkedOrd ? `Via ${linkedOrd.order_number}` : `Paid · ${r.status}`,
+              summary: `${r.widget_name || 'C2P Checkout'}${linkedOrd ? ` · Counted under ${linkedOrd.order_number}` : ''}`,
               created_at: s.paid_at,
             });
           }
         });
       } else {
-        if (r.issuer_uid.toUpperCase() === normalized) {
+        const linkedLegacyOrd =
+          (r.linked_order_id ? orderById.get(r.linked_order_id) : undefined) ||
+          data.orders.find((o) => o.c2p_ref_code === r.ref_code);
+        if (normUid(r.issuer_uid) === normalized) {
           rows.push({
             id: `c2p_open_${r.id}`,
             code: r.ref_code,
@@ -758,13 +868,13 @@ export function buildUidUnifiedTransactions(
             role: 'Receiver / Counterparty',
             counterpartyUid: r.counterparty_uid || 'ANY PAYER',
             amount: r.points_amount,
-            direction: r.status === 'Confirmed' ? '+' : 'Escrow',
-            status: r.status,
+            direction: r.status === 'Confirmed' && !linkedLegacyOrd ? '+' : 'Escrow',
+            status: linkedLegacyOrd ? `Via ${linkedLegacyOrd.order_number}` : r.status,
             summary: r.widget_name || r.description || 'C2P Checkout Widget',
             created_at: r.created_at,
           });
         }
-        if (r.counterparty_uid?.toUpperCase() === normalized) {
+        if (normUid(r.counterparty_uid) === normalized) {
           rows.push({
             id: `c2p_pay_${r.id}`,
             code: r.ref_code,
@@ -772,8 +882,8 @@ export function buildUidUnifiedTransactions(
             role: 'Issuer / Sender',
             counterpartyUid: r.issuer_uid,
             amount: r.points_amount,
-            direction: r.status === 'Confirmed' ? '-' : 'Escrow',
-            status: r.status,
+            direction: r.status === 'Confirmed' && !linkedLegacyOrd ? '-' : 'Escrow',
+            status: linkedLegacyOrd ? `Via ${linkedLegacyOrd.order_number}` : r.status,
             summary: r.widget_name || r.description || 'C2P Checkout',
             created_at: r.confirmed_at || r.created_at,
           });
@@ -783,15 +893,16 @@ export function buildUidUnifiedTransactions(
   }
 
   for (const b of data.batchPayments) {
-    const totalBatch = b.recipients.reduce((acc, r) => acc + r.points, 0) * Math.max(1, b.send_count);
-    if (b.creator_uid.toUpperCase() === normalized && b.send_count > 0) {
+    const totalBatch =
+      b.recipients.reduce((acc, r) => acc + (Number(r.points) || 0), 0) * Math.max(1, b.send_count);
+    if (normUid(b.creator_uid) === normalized && b.send_count > 0) {
       rows.push({
         id: `bat_s_${b.id}`,
         code: b.batch_code,
         category: 'Batch',
         role: 'Issuer / Sender',
         counterpartyUid: `${b.recipients.length} UIDs`,
-        amount: totalBatch,
+        amount: round2(totalBatch),
         direction: '-',
         status: `${b.status} (${b.send_count}×)`,
         summary: b.batch_name,
@@ -800,14 +911,14 @@ export function buildUidUnifiedTransactions(
     }
     if (b.send_count > 0) {
       b.recipients.forEach((rec, idx) => {
-        if (rec.uid.toUpperCase() === normalized) {
+        if (normUid(rec.uid) === normalized) {
           rows.push({
             id: `bat_r_${b.id}_${idx}`,
             code: b.batch_code,
             category: 'Batch',
             role: 'Receiver / Counterparty',
             counterpartyUid: b.creator_uid,
-            amount: rec.points * b.send_count,
+            amount: round2((Number(rec.points) || 0) * b.send_count),
             direction: '+',
             status: `${b.status} (${b.send_count}×)`,
             summary: `${b.batch_name}${rec.note ? ` · ${rec.note}` : ''}`,
@@ -819,7 +930,9 @@ export function buildUidUnifiedTransactions(
   }
 
   for (const e of data.pointExchanges) {
-    if (e.seller_uid.toUpperCase() === normalized) {
+    const sellerDeducted =
+      e.status === 'Escrow Locked' || e.status === 'Proof Submitted' || e.status === 'Released';
+    if (normUid(e.seller_uid) === normalized) {
       rows.push({
         id: `exc_s_${e.id}`,
         code: e.exchange_code,
@@ -827,13 +940,13 @@ export function buildUidUnifiedTransactions(
         role: 'Issuer / Sender',
         counterpartyUid: e.buyer_uid || 'OPEN',
         amount: e.points_requested,
-        direction: e.status === 'Released' ? '-' : 'Escrow',
+        direction: sellerDeducted ? '-' : 'Escrow',
         status: e.status,
         summary: `${e.points_requested} pts ↔ ${e.cash_amount} ${e.currency}`,
         created_at: e.created_at,
       });
     }
-    if (e.buyer_uid?.toUpperCase() === normalized) {
+    if (normUid(e.buyer_uid) === normalized) {
       rows.push({
         id: `exc_b_${e.id}`,
         code: e.exchange_code,
@@ -850,7 +963,7 @@ export function buildUidUnifiedTransactions(
   }
 
   for (const inv of data.investments) {
-    if (inv.investor_uid.toUpperCase() === normalized) {
+    if (normUid(inv.investor_uid) === normalized) {
       rows.push({
         id: `inv_${inv.id}`,
         code: inv.investment_code,
@@ -860,9 +973,23 @@ export function buildUidUnifiedTransactions(
         amount: inv.invested_points,
         direction: inv.status === 'Cancelled' ? 'Escrow' : '-',
         status: `${inv.status} (${inv.share_percentage}%)`,
-        summary: `Project investment · Dividends: +${inv.dividends_earned} pts`,
+        summary: `Project investment · Principal locked`,
         created_at: inv.created_at,
       });
+      if ((Number(inv.dividends_earned) || 0) > 0) {
+        rows.push({
+          id: `div_${inv.id}`,
+          code: inv.investment_code,
+          category: 'Investment',
+          role: 'Receiver / Counterparty',
+          counterpartyUid: inv.project_code || inv.listing_code,
+          amount: inv.dividends_earned,
+          direction: '+',
+          status: 'Dividend Earned',
+          summary: `Shareholder dividend payout (${inv.share_percentage}% share)`,
+          created_at: inv.created_at,
+        });
+      }
     }
   }
 

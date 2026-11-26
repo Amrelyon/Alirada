@@ -216,7 +216,7 @@ export const ServiceLedgerView: React.FC = () => {
             >
               {currentProfile.universal_id}
             </button>{' '}
-            · Balance: {myMetrics?.balance ?? 0} pts · Daily Hours on {loggedDate}: {myTodayHours}h / {systemConfig.daily_max_hours}h
+            · Earned: +{myMetrics?.total_earned ?? 0} pts · Deducted: -{myMetrics?.total_deductions ?? 0} pts · Balance: {myMetrics?.balance ?? 0} pts · Daily Hours on {loggedDate}: {myTodayHours}h / {systemConfig.daily_max_hours}h
           </p>
         </div>
 
@@ -578,6 +578,7 @@ export const ServiceLedgerView: React.FC = () => {
                     <th className="py-2 pr-3 font-medium">Servant</th>
                     <th className="py-2 pr-3 font-medium">Requester</th>
                     <th className="py-2 pr-3 font-medium">Ref Log</th>
+                    <th className="py-2 pr-3 font-medium">Status</th>
                     <th className="py-2 text-right font-medium">Deducted</th>
                   </tr>
                 </thead>
@@ -594,8 +595,11 @@ export const ServiceLedgerView: React.FC = () => {
                       <td className="py-2.5 pr-3 font-mono-tabular text-stone-500">
                         {d.related_service_log_id || '—'}
                       </td>
+                      <td className="py-2.5 pr-3 text-stone-600 dark:text-stone-300">
+                        {d.status}
+                      </td>
                       <td className="py-2.5 text-right font-mono-tabular font-semibold text-rose-700 dark:text-rose-400">
-                        -{d.deducted_score}
+                        {d.status === 'Disputed' ? `${d.deducted_score} (Paused)` : `-${d.deducted_score}`}
                       </td>
                     </tr>
                   ))}
