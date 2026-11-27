@@ -1,7 +1,7 @@
 import React, { useEffect, useMemo, useState } from 'react';
-import { Check, Code2, Copy, ExternalLink, PauseCircle, Plus, Send, Trash2, X } from 'lucide-react';
+import { Check, Code2, Copy, ExternalLink, PauseCircle, Percent, Plus, Save, Send, Trash2, X } from 'lucide-react';
 import { getEffectiveListingAvailability, useAlirada } from '../context/AliradaContext';
-import { BatchRecipient, PaymentModel, TransactionRef, TriggerType } from '../types/alirada';
+import { BatchPayment, BatchRecipient, PaymentModel, TransactionRef, TriggerType } from '../types/alirada';
 import { UserAvatar } from '../components/UserAvatar';
 import { buildUidUnifiedTransactions } from '../lib/ledgerMath';
 import { encodeWidgetPreview } from '../lib/widgetPreview';
@@ -116,12 +116,15 @@ export const PaymentsExchangeView: React.FC = () => {
   );
 
   // Batch Payments Form
+  const [editingBatchId, setEditingBatchId] = useState<string | undefined>(undefined);
   const [batchName, setBatchName] = useState('');
+  const [batchMode, setBatchMode] = useState<'points' | 'percentage'>('points');
+  const [batchPoolPoints, setBatchPoolPoints] = useState<number>(100);
   const [batchRecurrence, setBatchRecurrence] = useState<'Once' | 'Weekly' | 'Monthly'>('Monthly');
   const [batchSchedule, setBatchSchedule] = useState('');
   const [batchNotes, setBatchNotes] = useState('');
   const [recipients, setRecipients] = useState<BatchRecipient[]>([
-    { uid: 'UID-2', points: 25, note: 'Field support' },
+    { uid: 'UID-2', points: 25, percentage: 100, note: 'Field support' },
   ]);
 
   // Point Exchange Form
@@ -176,21 +179,79 @@ export const PaymentsExchangeView: React.FC = () => {
     }
   };
 
+  const buildBatchPayload = () => ({
+    id: editingBatchId,
+    batch_name: batchName,
+    recipients: recipients.map((r) => ({
+      uid: r.uid.trim().toUpperCase(),
+      points:
+        batchMode === 'percentage'
+          ? Number((((Number(batchPoolPoints) || 0) * (Number(r.percentage) || 0)) / 100).toFixed(2))
+          : Number((Number(r.points) || 0).toFixed(2)),
+      ...(batchMode === 'percentage' ? { percentage: Number(r.percentage) || 0 } : {}),
+      note: r.note,
+    })),
+    distribution_mode: batchMode,
+    pool_points:
+      batchMode === 'percentage'
+        ? Number(batchPoolPoints) || 0
+        : Number(recipients.reduce((s, r) => s + (Number(r.points) || 0), 0).toFixed(2)),
+    funding_source: 'PERSONAL' as const,
+    scheduled_time: batchSchedule || undefined,
+    recurrence: batchRecurrence,
+    notes: batchNotes,
+  });
+
   const handleSaveBatch = async (e: React.FormEvent) => {
     e.preventDefault();
-    const cleanRecs = recipients.filter((r) => r.uid.trim() && r.points > 0);
-    if (cleanRecs.length === 0) return;
-    const ok = await saveBatchPayment({
-      batch_name: batchName,
-      recipients: cleanRecs,
-      scheduled_time: batchSchedule || undefined,
-      recurrence: batchRecurrence,
-      notes: batchNotes,
-    });
-    if (ok) {
+    const saved = await saveBatchPayment(buildBatchPayload());
+    if (saved) {
+      setEditingBatchId(undefined);
       setBatchName('');
       setBatchNotes('');
     }
+  };
+
+  const handleSaveAndSendBatch = async () => {
+    const saved = await saveBatchPayment(buildBatchPayload());
+    if (saved) {
+      await sendBatchPayment(saved.id, saved);
+      setEditingBatchId(undefined);
+      setBatchName('');
+      setBatchNotes('');
+    }
+  };
+
+  const handleLoadBatchTemplate = (b: BatchPayment) => {
+    setEditingBatchId(b.obligation_status === 'None' ? b.id : undefined);
+    setBatchName(b.batch_name);
+    setBatchMode(b.distribution_mode || 'points');
+    setBatchPoolPoints(b.pool_points || b.recipients.reduce((s, r) => s + r.points, 0));
+    setBatchRecurrence(b.recurrence);
+    setBatchSchedule(b.scheduled_time || '');
+    setBatchNotes(b.notes || '');
+    setRecipients(
+      b.recipients.map((r) => ({
+        uid: r.uid,
+        points: r.points,
+        percentage: r.percentage ?? 0,
+        note: r.note || '',
+      }))
+    );
+    pushToast('success', `Loaded "${b.batch_name}" into batch composer.`);
+  };
+
+  const splitBatchEquallyPct = () => {
+    if (recipients.length === 0) return;
+    const base = Math.floor(10000 / recipients.length) / 100;
+    const remainder = Number((100 - base * (recipients.length - 1)).toFixed(2));
+    setBatchMode('percentage');
+    setRecipients((prev) =>
+      prev.map((r, idx) => ({
+        ...r,
+        percentage: idx === 0 ? remainder : base,
+      }))
+    );
   };
 
   const handleCreateExchange = async (e: React.FormEvent) => {
@@ -742,7 +803,7 @@ export const PaymentsExchangeView: React.FC = () => {
             className="lg:col-span-5 bg-white dark:bg-[#12151B] border border-stone-200 dark:border-stone-800 rounded-xl p-6 space-y-4 text-xs"
           >
             <h2 className="text-base font-semibold text-stone-900 dark:text-stone-100">
-              Create & Schedule Batch Payment
+              Create &amp; Save Batch Transfer
             </h2>
             <input
               type="text"
@@ -752,6 +813,59 @@ export const PaymentsExchangeView: React.FC = () => {
               onChange={(e) => setBatchName(e.target.value)}
               className="w-full px-3 py-2 text-sm rounded-lg border border-stone-300 dark:border-stone-700 bg-stone-50 dark:bg-[#0B0D10]"
             />
+
+            {/* Distribution Mode Switch */}
+            <div className="space-y-2">
+              <label className="block font-medium">Allocation Mode</label>
+              <div className="grid grid-cols-2 gap-1 p-1 rounded-lg bg-stone-100 dark:bg-[#0B0D10] border border-stone-200 dark:border-stone-800">
+                <button
+                  type="button"
+                  onClick={() => setBatchMode('points')}
+                  className={`py-1.5 px-2 rounded text-xs font-medium ${
+                    batchMode === 'points'
+                      ? 'bg-white dark:bg-[#1D222C] text-stone-900 dark:text-stone-100 shadow-sm'
+                      : 'text-stone-500 dark:text-stone-400'
+                  }`}
+                >
+                  Specified Points (pts)
+                </button>
+                <button
+                  type="button"
+                  onClick={() => setBatchMode('percentage')}
+                  className={`py-1.5 px-2 rounded text-xs font-medium inline-flex items-center justify-center gap-1 ${
+                    batchMode === 'percentage'
+                      ? 'bg-white dark:bg-[#1D222C] text-stone-900 dark:text-stone-100 shadow-sm'
+                      : 'text-stone-500 dark:text-stone-400'
+                  }`}
+                >
+                  <Percent className="w-3 h-3" /> Percentage (%) of Pool
+                </button>
+              </div>
+            </div>
+
+            {batchMode === 'percentage' && (
+              <div className="p-3 rounded-lg bg-stone-50 dark:bg-[#0B0D10] border border-stone-200 dark:border-stone-800 space-y-2">
+                <div className="flex items-center justify-between gap-2">
+                  <label className="font-medium">Total Pool Points to Divide (pts)</label>
+                  <button
+                    type="button"
+                    onClick={splitBatchEquallyPct}
+                    className="text-[11px] font-medium text-[#B88B1E] dark:text-[#D4AF37] hover:underline"
+                  >
+                    Split 100% Equally
+                  </button>
+                </div>
+                <input
+                  type="number"
+                  step="0.01"
+                  min={0.01}
+                  value={batchPoolPoints}
+                  onChange={(e) => setBatchPoolPoints(Number(e.target.value))}
+                  className="w-full px-3 py-2 text-sm font-mono-tabular rounded-lg border border-stone-300 dark:border-stone-700 bg-white dark:bg-[#12151B]"
+                />
+              </div>
+            )}
+
             <div className="grid grid-cols-2 gap-3">
               <select
                 value={batchRecurrence}
@@ -776,50 +890,122 @@ export const PaymentsExchangeView: React.FC = () => {
                 <button
                   type="button"
                   onClick={() =>
-                    setRecipients((prev) => [...prev, { uid: 'UID-4', points: 15, note: '' }])
+                    setRecipients((prev) => [
+                      ...prev,
+                      { uid: 'UID-4', points: 15, percentage: 0, note: '' },
+                    ])
                   }
                   className="text-[#B88B1E] dark:text-[#D4AF37] inline-flex items-center gap-1"
                 >
                   <Plus className="w-3.5 h-3.5" /> Add Row
                 </button>
               </div>
-              {recipients.map((rec, idx) => (
-                <div key={idx} className="grid grid-cols-12 gap-2">
-                  <input
-                    type="text"
-                    placeholder="UID-2"
-                    value={rec.uid}
-                    onChange={(e) =>
-                      setRecipients((prev) =>
-                        prev.map((r, i) => (i === idx ? { ...r, uid: e.target.value } : r))
+              {recipients.map((rec, idx) => {
+                const rowPts =
+                  batchMode === 'percentage'
+                    ? Number(
+                        (
+                          ((Number(batchPoolPoints) || 0) * (Number(rec.percentage) || 0)) /
+                          100
+                        ).toFixed(2)
                       )
-                    }
-                    className="col-span-4 px-2.5 py-1.5 font-mono-tabular rounded border border-stone-300 dark:border-stone-700 bg-stone-50 dark:bg-[#0B0D10]"
-                  />
-                  <input
-                    type="number"
-                    min={1}
-                    value={rec.points}
-                    onChange={(e) =>
-                      setRecipients((prev) =>
-                        prev.map((r, i) => (i === idx ? { ...r, points: Number(e.target.value) } : r))
+                    : Number(rec.points) || 0;
+                return (
+                  <div key={idx} className="grid grid-cols-12 gap-1.5 items-center">
+                    <input
+                      type="text"
+                      placeholder="UID-2"
+                      value={rec.uid}
+                      onChange={(e) =>
+                        setRecipients((prev) =>
+                          prev.map((r, i) => (i === idx ? { ...r, uid: e.target.value } : r))
+                        )
+                      }
+                      className="col-span-3 px-2 py-1.5 font-mono-tabular rounded border border-stone-300 dark:border-stone-700 bg-stone-50 dark:bg-[#0B0D10]"
+                    />
+                    {batchMode === 'percentage' ? (
+                      <div className="col-span-4 flex items-center gap-1">
+                        <input
+                          type="number"
+                          min={0}
+                          max={100}
+                          step="0.1"
+                          placeholder="%"
+                          value={rec.percentage ?? 0}
+                          onChange={(e) =>
+                            setRecipients((prev) =>
+                              prev.map((r, i) =>
+                                i === idx ? { ...r, percentage: Number(e.target.value) } : r
+                              )
+                            )
+                          }
+                          className="w-16 px-2 py-1.5 font-mono-tabular rounded border border-stone-300 dark:border-stone-700 bg-stone-50 dark:bg-[#0B0D10]"
+                        />
+                        <span className="font-mono-tabular text-[11px] text-stone-500 whitespace-nowrap">
+                          ={rowPts}
+                        </span>
+                      </div>
+                    ) : (
+                      <input
+                        type="number"
+                        min={0.01}
+                        step="0.01"
+                        placeholder="pts"
+                        value={rec.points}
+                        onChange={(e) =>
+                          setRecipients((prev) =>
+                            prev.map((r, i) =>
+                              i === idx ? { ...r, points: Number(e.target.value) } : r
+                            )
+                          )
+                        }
+                        className="col-span-4 px-2 py-1.5 font-mono-tabular rounded border border-stone-300 dark:border-stone-700 bg-stone-50 dark:bg-[#0B0D10]"
+                      />
+                    )}
+                    <input
+                      type="text"
+                      placeholder="Note"
+                      value={rec.note || ''}
+                      onChange={(e) =>
+                        setRecipients((prev) =>
+                          prev.map((r, i) => (i === idx ? { ...r, note: e.target.value } : r))
+                        )
+                      }
+                      className="col-span-4 px-2 py-1.5 rounded border border-stone-300 dark:border-stone-700 bg-stone-50 dark:bg-[#0B0D10]"
+                    />
+                    <div className="col-span-1 text-end">
+                      {recipients.length > 1 && (
+                        <button
+                          type="button"
+                          onClick={() =>
+                            setRecipients((prev) => prev.filter((_, i) => i !== idx))
+                          }
+                          className="p-1 text-stone-400 hover:text-rose-600"
+                          title="Remove recipient"
+                        >
+                          <Trash2 className="w-3.5 h-3.5" />
+                        </button>
+                      )}
+                    </div>
+                  </div>
+                );
+              })}
+
+              <p className="text-[11px] font-mono-tabular text-stone-500 dark:text-stone-400 pt-1">
+                {batchMode === 'percentage'
+                  ? `Allocated: ${recipients
+                      .reduce((s, r) => s + (Number(r.percentage) || 0), 0)
+                      .toFixed(1)}% = ${recipients
+                      .reduce(
+                        (s, r) =>
+                          s + ((Number(batchPoolPoints) || 0) * (Number(r.percentage) || 0)) / 100,
+                        0
                       )
-                    }
-                    className="col-span-3 px-2.5 py-1.5 font-mono-tabular rounded border border-stone-300 dark:border-stone-700 bg-stone-50 dark:bg-[#0B0D10]"
-                  />
-                  <input
-                    type="text"
-                    placeholder="Note"
-                    value={rec.note || ''}
-                    onChange={(e) =>
-                      setRecipients((prev) =>
-                        prev.map((r, i) => (i === idx ? { ...r, note: e.target.value } : r))
-                      )
-                    }
-                    className="col-span-5 px-2.5 py-1.5 rounded border border-stone-300 dark:border-stone-700 bg-stone-50 dark:bg-[#0B0D10]"
-                  />
-                </div>
-              ))}
+                      .toFixed(2)} pts`
+                  : `Total Batch Payout: ${recipients
+                      .reduce((s, r) => s + (Number(r.points) || 0), 0)
+                      .toFixed(2)} pts`}
+              </p>
             </div>
 
             <input
@@ -830,43 +1016,69 @@ export const PaymentsExchangeView: React.FC = () => {
               className="w-full px-3 py-2 text-sm rounded-lg border border-stone-300 dark:border-stone-700 bg-stone-50 dark:bg-[#0B0D10]"
             />
 
-            <button
-              type="submit"
-              className="w-full py-2.5 text-sm font-semibold rounded-lg bg-[#B88B1E] dark:bg-[#D4AF37] text-white dark:text-stone-950"
-            >
-              Save Batch Schedule
-            </button>
+            <div className="grid grid-cols-1 sm:grid-cols-2 gap-2">
+              <button
+                type="submit"
+                className="w-full py-2.5 px-3 text-xs font-semibold rounded-lg border border-stone-300 dark:border-stone-700 text-stone-800 dark:text-stone-200 hover:bg-stone-100 dark:hover:bg-stone-800 inline-flex items-center justify-center gap-1.5"
+              >
+                <Save className="w-3.5 h-3.5" /> Save for Future Transfer
+              </button>
+              <button
+                type="button"
+                onClick={handleSaveAndSendBatch}
+                className="w-full py-2.5 px-3 text-xs font-semibold rounded-lg bg-[#B88B1E] dark:bg-[#D4AF37] text-white dark:text-stone-950 inline-flex items-center justify-center gap-1.5"
+              >
+                <Send className="w-3.5 h-3.5" /> Save &amp; Send Now
+              </button>
+            </div>
           </form>
 
           <div className="lg:col-span-7 bg-white dark:bg-[#12151B] border border-stone-200 dark:border-stone-800 rounded-xl p-6 space-y-4">
             <h2 className="text-base font-semibold text-stone-900 dark:text-stone-100">
-              Saved & Disbursed Batches
+              Saved Templates &amp; Disbursed Batches
             </h2>
             <div className="divide-y divide-stone-100 dark:divide-stone-800/70">
               {batchPayments.map((b) => {
-                const sum = b.recipients.reduce((acc, r) => acc + r.points, 0);
+                const sum = b.recipients.reduce((acc, r) => acc + (Number(r.points) || 0), 0);
+                const isFeePool = b.funding_source === 'PLATFORM_FEES';
+                const canSend = !isFeePool || isAdmin;
                 return (
                   <div key={b.id} className="py-3.5 flex flex-col sm:flex-row sm:items-center justify-between gap-3 text-xs">
                     <div className="space-y-1">
                       <p className="font-semibold text-sm text-stone-900 dark:text-stone-100">
                         {b.batch_name}{' '}
                         <span className="font-mono-tabular text-xs font-normal text-stone-500">
-                          ({b.batch_code})
+                          ({b.batch_code}){isFeePool ? ' · Platform Fee Pool' : ''}
                         </span>
                       </p>
                       <p className="text-stone-500 dark:text-stone-400 font-mono-tabular">
-                        {b.recipients.length} recipients · {sum} pts/run · {b.recurrence} · Sent {b.send_count}×
+                        {b.recipients.length} recipients · {sum} pts/run ·{' '}
+                        {b.distribution_mode === 'percentage'
+                          ? `% of ${b.pool_points || sum} pts`
+                          : 'Specified pts'}{' '}
+                        · {b.recurrence} · Sent {b.send_count}×
                       </p>
                     </div>
-                    <div className="flex items-center gap-2">
-                      <button
-                        type="button"
-                        onClick={() => sendBatchPayment(b.id)}
-                        className="px-3 py-1.5 rounded-md bg-[#B88B1E] dark:bg-[#D4AF37] text-white dark:text-stone-950 font-semibold inline-flex items-center gap-1"
-                      >
-                        <Send className="w-3.5 h-3.5" />
-                        {b.send_count > 0 ? 'Re-Send Batch' : 'Send Now'}
-                      </button>
+                    <div className="flex items-center gap-2 flex-wrap">
+                      {!isFeePool && (
+                        <button
+                          type="button"
+                          onClick={() => handleLoadBatchTemplate(b)}
+                          className="px-2.5 py-1.5 rounded-md border border-stone-300 dark:border-stone-700 hover:bg-stone-100 dark:hover:bg-stone-800 font-medium inline-flex items-center gap-1"
+                        >
+                          <Copy className="w-3 h-3" /> Load
+                        </button>
+                      )}
+                      {canSend && (
+                        <button
+                          type="button"
+                          onClick={() => sendBatchPayment(b.id)}
+                          className="px-3 py-1.5 rounded-md bg-[#B88B1E] dark:bg-[#D4AF37] text-white dark:text-stone-950 font-semibold inline-flex items-center gap-1"
+                        >
+                          <Send className="w-3.5 h-3.5" />
+                          {b.send_count > 0 ? 'Re-Send Batch' : 'Send Now'}
+                        </button>
+                      )}
                       {b.obligation_status === 'None' && (
                         <button
                           type="button"

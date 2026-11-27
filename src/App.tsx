@@ -167,7 +167,7 @@ const AliradaWorkspace: React.FC = () => {
   }
 
   return (
-    <div className="min-h-screen flex bg-stone-50 dark:bg-[#0B0D10] text-stone-900 dark:text-stone-100">
+    <div className="min-h-screen w-full max-w-full overflow-x-clip flex bg-stone-50 dark:bg-[#0B0D10] text-stone-900 dark:text-stone-100">
       {/* Desktop Collapsible Sidebar (Sticky Flex — naturally flips start edge in RTL with zero overlap) */}
       <aside
         className={`hidden md:flex flex-col shrink-0 sticky top-0 h-screen border-e border-stone-200 dark:border-stone-800/80 bg-white dark:bg-[#101318] z-30 transition-[width] duration-200 ease-out overflow-hidden ${
@@ -266,9 +266,9 @@ const AliradaWorkspace: React.FC = () => {
       </aside>
 
       {/* Main Column */}
-      <div className="flex-1 flex flex-col min-w-0">
+      <div className="flex-1 flex flex-col min-w-0 w-full">
         {/* Top Bar (3-zone contract, <= 56px height) */}
-        <header className="sticky top-0 z-20 h-14 bg-white/90 dark:bg-[#101318]/90 backdrop-blur-md border-b border-stone-200 dark:border-stone-800/80 px-4 sm:px-6 flex items-center justify-between gap-4">
+        <header className="sticky top-0 z-20 h-14 w-full max-w-full overflow-x-hidden bg-white/90 dark:bg-[#101318]/90 backdrop-blur-md border-b border-stone-200 dark:border-stone-800/80 px-3 sm:px-6 flex items-center justify-between gap-2 sm:gap-4">
           {/* Zone 1: Mobile Brand / Desktop Sidebar Toggle + Section Title */}
           <div className="flex items-center gap-2.5 min-w-0">
             <div className="md:hidden flex items-center gap-2">
@@ -342,10 +342,10 @@ const AliradaWorkspace: React.FC = () => {
         </main>
       </div>
 
-      {/* Mobile Bottom Navigation Bar (Fixed, h-14, no horizontal scroll) */}
+      {/* Mobile Bottom Navigation Bar (Fixed at viewport bottom in both LTR and Arabic RTL across screen sizes) */}
       <nav
         aria-label="Mobile Navigation"
-        className="md:hidden fixed bottom-0 inset-x-0 z-30 h-14 bg-white/95 dark:bg-[#101318]/95 backdrop-blur-md border-t border-stone-200 dark:border-stone-800 grid grid-cols-5"
+        className="md:hidden mobile-bottom-nav z-40 min-h-[3.5rem] bg-white/95 dark:bg-[#101318]/95 backdrop-blur-md border-t border-stone-200 dark:border-stone-800 grid grid-cols-5 shadow-[0_-2px_10px_rgba(0,0,0,0.05)]"
       >
         {(
           [
@@ -364,12 +364,12 @@ const AliradaWorkspace: React.FC = () => {
                 setActiveSection(id);
                 setMobileMenuOpen(false);
               }}
-              className={`flex flex-col items-center justify-center gap-0.5 text-[10px] font-medium ${
+              className={`min-w-0 min-h-[44px] flex flex-col items-center justify-center gap-0.5 px-1 text-[10px] font-medium transition-colors ${
                 active ? 'text-[#B88B1E] dark:text-[#D4AF37]' : 'text-stone-500 dark:text-stone-400'
               }`}
             >
-              <Icon className="w-4 h-4" />
-              <span className="truncate max-w-[64px]">{shortLabel}</span>
+              <Icon className="w-4 h-4 shrink-0" />
+              <span className="truncate w-full text-center leading-tight">{shortLabel}</span>
             </button>
           );
         })}
@@ -377,7 +377,7 @@ const AliradaWorkspace: React.FC = () => {
         <button
           type="button"
           onClick={() => setMobileMenuOpen((v) => !v)}
-          className={`flex flex-col items-center justify-center gap-0.5 text-[10px] font-medium ${
+          className={`min-w-0 min-h-[44px] flex flex-col items-center justify-center gap-0.5 px-1 text-[10px] font-medium transition-colors ${
             mobileMenuOpen ||
             activeSection === 'payments' ||
             activeSection === 'governance' ||
@@ -386,14 +386,14 @@ const AliradaWorkspace: React.FC = () => {
               : 'text-stone-500 dark:text-stone-400'
           }`}
         >
-          <Menu className="w-4 h-4" />
-          <span>More</span>
+          <Menu className="w-4 h-4 shrink-0" />
+          <span className="truncate w-full text-center leading-tight">More</span>
         </button>
       </nav>
 
       {/* Mobile Collapsible Drawer for Payments, Governance, Admin */}
       {mobileMenuOpen && (
-        <div className="md:hidden fixed inset-x-0 bottom-14 z-30 bg-white dark:bg-[#12151B] border-t border-stone-200 dark:border-stone-800 p-4 space-y-2 shadow-xl">
+        <div className="md:hidden fixed left-0 right-0 bottom-[calc(3.5rem+env(safe-area-inset-bottom,0px))] z-40 bg-white dark:bg-[#12151B] border-t border-stone-200 dark:border-stone-800 p-4 space-y-2 shadow-xl">
           {(['payments', 'governance', ...(isAdmin ? (['admin'] as const) : [])] as AppSection[]).map(
             (id) => (
               <button
@@ -418,7 +418,7 @@ const AliradaWorkspace: React.FC = () => {
 
       {/* Toast Notifications */}
       {toasts.length > 0 && (
-        <div className="fixed bottom-16 md:bottom-5 end-4 z-50 space-y-2 max-w-sm w-[calc(100%-2rem)]">
+        <div className="fixed bottom-[calc(4.25rem+env(safe-area-inset-bottom,0px))] md:bottom-5 end-4 z-50 space-y-2 max-w-sm w-[calc(100%-2rem)]">
           {toasts.map((t) => (
             <div
               key={t.id}

@@ -231,7 +231,8 @@ service cloud.firestore {
         ]) &&
         data.keys().hasOnly([
           'project_code', 'owner_uid', 'owner_auth_uid', 'elected_ceo_uid', 'name',
-          'category', 'description', 'visibility', 'location', 'google_map_link',
+          'category', 'project_type', 'description', 'visibility',
+          'district', 'city', 'country', 'location', 'google_map_link',
           'contact_info', 'image_urls', 'video_url', 'evidence_link', 'entity_type',
           'investment_goal_points', 'budget_doc_url', 'presentation_url', 'investment_status',
           'delegates', 'members', 'join_requests', 'obligation_status', 'createdAt', 'updatedAt'
@@ -242,8 +243,12 @@ service cloud.firestore {
         (!('elected_ceo_uid' in data) || isOptStr(data.elected_ceo_uid, 32)) &&
         isNonEmptyStr(data.name, 160) &&
         isNonEmptyStr(data.category, 100) &&
+        (!('project_type' in data) || isOptStr(data.project_type, 100)) &&
         isNonEmptyStr(data.description, 2000) &&
         data.visibility in ['Public', 'Private'] &&
+        (!('district' in data) || isOptStr(data.district, 100)) &&
+        (!('city' in data) || isOptStr(data.city, 100)) &&
+        (!('country' in data) || isOptStr(data.country, 100)) &&
         (!('location' in data) || isOptStr(data.location, 160)) &&
         (!('google_map_link' in data) || isOptStr(data.google_map_link, 512)) &&
         (!('contact_info' in data) || isOptStr(data.contact_info, 200)) &&
@@ -525,7 +530,9 @@ service cloud.firestore {
         ]) &&
         data.keys().hasOnly([
           'batch_code', 'creator_uid', 'creator_auth_uid', 'batch_name',
-          'recipients', 'scheduled_time', 'recurrence', 'notes', 'last_sent_at',
+          'recipients', 'recipient_uids', 'recipient_auth_uids',
+          'distribution_mode', 'pool_points', 'funding_source',
+          'scheduled_time', 'recurrence', 'notes', 'last_sent_at',
           'send_count', 'status', 'obligation_status', 'createdAt', 'updatedAt'
         ]) &&
         isNonEmptyStr(data.batch_code, 40) &&
@@ -533,6 +540,11 @@ service cloud.firestore {
         isValidId(data.creator_auth_uid) &&
         isNonEmptyStr(data.batch_name, 160) &&
         data.recipients is list && data.recipients.size() >= 1 && data.recipients.size() <= 100 &&
+        (!('recipient_uids' in data) || (data.recipient_uids is list && data.recipient_uids.size() <= 100 && (data.recipient_uids.size() == 0 || data.recipient_uids[0] is string))) &&
+        (!('recipient_auth_uids' in data) || (data.recipient_auth_uids is list && data.recipient_auth_uids.size() <= 100 && (data.recipient_auth_uids.size() == 0 || data.recipient_auth_uids[0] is string))) &&
+        (!('distribution_mode' in data) || data.distribution_mode in ['points', 'percentage']) &&
+        (!('pool_points' in data) || (data.pool_points is number && data.pool_points >= 0)) &&
+        (!('funding_source' in data) || data.funding_source in ['PERSONAL', 'PLATFORM_FEES']) &&
         (!('scheduled_time' in data) || isOptStr(data.scheduled_time, 64)) &&
         data.recurrence in ['Once', 'Weekly', 'Monthly'] &&
         (!('notes' in data) || isOptStr(data.notes, 500)) &&
@@ -805,7 +817,8 @@ service cloud.firestore {
         incoming().updatedAt == request.time && (
           isAdmin() ||
           (existing().owner_auth_uid == request.auth.uid && incoming().diff(existing()).affectedKeys().hasOnly([
-            'name', 'category', 'description', 'visibility', 'location', 'google_map_link',
+            'name', 'category', 'project_type', 'description', 'visibility',
+            'district', 'city', 'country', 'location', 'google_map_link',
             'contact_info', 'image_urls', 'video_url', 'evidence_link', 'delegates',
             'members', 'join_requests', 'elected_ceo_uid', 'investment_goal_points',
             'budget_doc_url', 'presentation_url', 'investment_status', 'obligation_status', 'updatedAt'
@@ -984,10 +997,19 @@ service cloud.firestore {
     }
 
     match /batch_payments/{batchId} {
-      allow get: if isVerifiedSignedIn() && isValidId(batchId) && (existing().creator_auth_uid == request.auth.uid || isAdmin());
-      allow list: if isVerifiedSignedIn() && (resource.data.creator_auth_uid == request.auth.uid || isAdmin());
+      allow get: if isVerifiedSignedIn() && isValidId(batchId) && (
+        existing().creator_auth_uid == request.auth.uid ||
+        ('recipient_auth_uids' in existing() && request.auth.uid in existing().recipient_auth_uids) ||
+        isAdmin()
+      );
+      allow list: if isVerifiedSignedIn() && (
+        resource.data.creator_auth_uid == request.auth.uid ||
+        ('recipient_auth_uids' in resource.data && request.auth.uid in resource.data.recipient_auth_uids) ||
+        isAdmin()
+      );
       allow create: if isVerifiedSignedIn() && isValidId(batchId) && isValidBatchPayment(incoming()) &&
         incoming().creator_auth_uid == request.auth.uid &&
+        (!('funding_source' in incoming()) || incoming().funding_source == 'PERSONAL' || isAdmin()) &&
         incoming().createdAt == request.time &&
         incoming().updatedAt == request.time;
       allow update: if isVerifiedSignedIn() && isValidId(batchId) && isValidBatchPayment(incoming()) &&
@@ -995,10 +1017,14 @@ service cloud.firestore {
         incoming().createdAt == existing().createdAt &&
         incoming().updatedAt == request.time && (
           isAdmin() ||
-          (existing().creator_auth_uid == request.auth.uid && incoming().diff(existing()).affectedKeys().hasOnly([
-            'batch_name', 'recipients', 'scheduled_time', 'recurrence', 'notes',
-            'last_sent_at', 'send_count', 'status', 'obligation_status', 'updatedAt'
-          ]))
+          (existing().creator_auth_uid == request.auth.uid &&
+            (!('funding_source' in incoming()) || incoming().funding_source == 'PERSONAL') &&
+            incoming().diff(existing()).affectedKeys().hasOnly([
+              'batch_name', 'recipients', 'recipient_uids', 'recipient_auth_uids',
+              'distribution_mode', 'pool_points', 'funding_source',
+              'scheduled_time', 'recurrence', 'notes',
+              'last_sent_at', 'send_count', 'status', 'obligation_status', 'updatedAt'
+            ]))
         );
       allow delete: if isVerifiedSignedIn() && isValidId(batchId) && ((existing().creator_auth_uid == request.auth.uid && existing().obligation_status == 'None') || isAdmin());
     }

@@ -15,6 +15,8 @@ import {
 } from 'lucide-react';
 import { ROOT_ADMIN_EMAIL, useAlirada } from '../context/AliradaContext';
 import { computeAllRecognitionFraudAlerts } from '../lib/ledgerMath';
+import { AdminFeePoolTransferCard } from '../components/AdminFeePoolTransferCard';
+import { AdminProjectStandardsCard } from '../components/AdminProjectStandardsCard';
 
 const DELEGATABLE_ADMIN_TASKS = [
   'Economy Settings',
@@ -892,6 +894,12 @@ export const AdminConsoleView: React.FC = () => {
           </div>
         )}
       </div>
+
+      {/* Collected Platform Fees Pool Batch Transfer (Single / Multi Account · % or Points · Save Templates) */}
+      <AdminFeePoolTransferCard />
+
+      {/* Community Project Standards Master Table Editor (23 Categories / 138+ Project Types) */}
+      <AdminProjectStandardsCard />
     </div>
   );
 };

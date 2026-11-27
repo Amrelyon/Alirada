@@ -133,6 +133,14 @@ export interface Listing {
   created_at: string;
 }
 
+export interface ProjectTypeStandard {
+  id: string;
+  category: string;
+  project_type: string;
+  min_per_district: number;
+  employees_per_project: number;
+}
+
 export interface Project {
   id: string;
   project_code: string;
@@ -141,8 +149,12 @@ export interface Project {
   elected_ceo_uid?: string;
   name: string;
   category: string;
+  project_type?: string;
   description: string;
   visibility: 'Public' | 'Private';
+  district?: string;
+  city?: string;
+  country?: string;
   location?: string;
   google_map_link?: string;
   contact_info?: string;
@@ -382,6 +394,7 @@ export interface TransactionRef {
 export interface BatchRecipient {
   uid: string;
   points: number;
+  percentage?: number;
   note?: string;
 }
 
@@ -392,6 +405,11 @@ export interface BatchPayment {
   creator_auth_uid: string;
   batch_name: string;
   recipients: BatchRecipient[];
+  recipient_uids?: string[];
+  recipient_auth_uids?: string[];
+  distribution_mode?: 'points' | 'percentage';
+  pool_points?: number;
+  funding_source?: 'PERSONAL' | 'PLATFORM_FEES';
   scheduled_time?: string;
   recurrence: 'Once' | 'Weekly' | 'Monthly';
   notes?: string;
@@ -468,6 +486,7 @@ export interface SystemConfigState {
   current_cycle_name: string;
   last_cycle_archived_at?: string;
   mock_data_cleared?: boolean;
+  project_standards?: ProjectTypeStandard[];
 }
 
 export interface LedgerMetrics {

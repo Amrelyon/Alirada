@@ -252,8 +252,12 @@ interface AliradaContextValue {
   createProject: (payload: {
     name: string;
     category: string;
+    project_type?: string;
     description: string;
     visibility: 'Public' | 'Private';
+    district?: string;
+    city?: string;
+    country?: string;
     location?: string;
     google_map_link?: string;
     contact_info?: string;
@@ -334,11 +338,14 @@ interface AliradaContextValue {
     id?: string;
     batch_name: string;
     recipients: BatchRecipient[];
+    distribution_mode?: 'points' | 'percentage';
+    pool_points?: number;
+    funding_source?: 'PERSONAL' | 'PLATFORM_FEES';
     scheduled_time?: string;
     recurrence: 'Once' | 'Weekly' | 'Monthly';
     notes?: string;
-  }) => Promise<boolean>;
-  sendBatchPayment: (batchId: string) => Promise<boolean>;
+  }) => Promise<BatchPayment | null>;
+  sendBatchPayment: (batchId: string, overrideBatch?: BatchPayment) => Promise<boolean>;
   deleteBatchPayment: (batchId: string) => Promise<boolean>;
   createPointExchange: (pointsRequested: number, cashAmount: number, currency: string, notes?: string) => Promise<boolean>;
   submitExchangeProof: (exchangeId: string, paymentProof: string) => Promise<boolean>;
@@ -650,7 +657,14 @@ export const AliradaProvider: React.FC<{ children: React.ReactNode }> = ({ child
         if (snap.exists()) {
           const data = snap.data() as { value?: Partial<SystemConfigState> };
           if (data.value) {
-            setSystemConfig((prev) => ({ ...prev, ...data.value }));
+            setSystemConfig((prev) => ({
+              ...prev,
+              ...data.value,
+              project_standards:
+                Array.isArray(data.value?.project_standards) && data.value.project_standards.length > 0
+                  ? data.value.project_standards
+                  : prev.project_standards || DEFAULT_SYSTEM_CONFIG.project_standards,
+            }));
             if (data.value.mock_data_cleared) {
               try {
                 localStorage.setItem('alirada_mock_cleared', 'true');
@@ -1076,10 +1090,14 @@ export const AliradaProvider: React.FC<{ children: React.ReactNode }> = ({ child
         ),
         query(collection(db, 'transaction_refs'), where('status', '==', 'Open')),
       ]);
-      bindCollection<BatchPayment>(
+      bindDualCollection<BatchPayment>(
         'batch_payments',
         setLiveBatches,
-        query(collection(db, 'batch_payments'), where('creator_auth_uid', '==', firebaseUser.uid))
+        query(collection(db, 'batch_payments'), where('creator_auth_uid', '==', firebaseUser.uid)),
+        query(
+          collection(db, 'batch_payments'),
+          where('recipient_auth_uids', 'array-contains', firebaseUser.uid)
+        )
       );
       bindCollection<UserReport>(
         'user_reports',
@@ -1125,7 +1143,15 @@ export const AliradaProvider: React.FC<{ children: React.ReactNode }> = ({ child
           if (snap.exists()) {
             const data = snap.data() as { value?: Partial<SystemConfigState> };
             if (data.value) {
-              setSystemConfig((prev) => ({ ...prev, ...data.value }));
+              setSystemConfig((prev) => ({
+                ...prev,
+                ...data.value,
+                project_standards:
+                  Array.isArray(data.value?.project_standards) &&
+                  data.value.project_standards.length > 0
+                    ? data.value.project_standards
+                    : prev.project_standards || DEFAULT_SYSTEM_CONFIG.project_standards,
+              }));
             }
           }
         },
@@ -2520,6 +2546,11 @@ export const AliradaProvider: React.FC<{ children: React.ReactNode }> = ({ child
     if (!requireVerifiedAuth()) return false;
     const id = makeId('prj');
     const goalPts = payload.investment_goal_points || 0;
+    const districtVal = payload.district?.trim() || '';
+    const cityVal = payload.city?.trim() || '';
+    const countryVal = payload.country?.trim() || '';
+    const composedLocation =
+      payload.location?.trim() || [districtVal, cityVal, countryVal].filter(Boolean).join(', ');
     const prj: Project = {
       id,
       project_code: `PRJ-${new Date().getFullYear()}-${String(projects.length + 12)}`,
@@ -2528,9 +2559,13 @@ export const AliradaProvider: React.FC<{ children: React.ReactNode }> = ({ child
       elected_ceo_uid: currentProfile.universal_id,
       name: payload.name.trim(),
       category: payload.category,
+      project_type: payload.project_type?.trim() || '',
       description: payload.description.trim(),
       visibility: payload.visibility,
-      location: payload.location?.trim() || '',
+      district: districtVal,
+      city: cityVal,
+      country: countryVal,
+      location: composedLocation,
       google_map_link: sanitizeExternalLink(payload.google_map_link),
       contact_info: payload.contact_info?.trim() || '',
       image_urls: ['/src/assets/images/listing_civic_academy_1795619024414.jpg'],
@@ -2556,8 +2591,12 @@ export const AliradaProvider: React.FC<{ children: React.ReactNode }> = ({ child
           elected_ceo_uid: prj.elected_ceo_uid,
           name: prj.name,
           category: prj.category,
+          project_type: prj.project_type || '',
           description: prj.description,
           visibility: prj.visibility,
+          district: prj.district || '',
+          city: prj.city || '',
+          country: prj.country || '',
           location: prj.location || '',
           google_map_link: prj.google_map_link || '',
           contact_info: prj.contact_info || '',
@@ -3435,20 +3474,84 @@ export const AliradaProvider: React.FC<{ children: React.ReactNode }> = ({ child
   };
 
   const saveBatchPayment: AliradaContextValue['saveBatchPayment'] = async (payload) => {
-    if (!requireVerifiedAuth()) return false;
+    if (!requireVerifiedAuth()) return null;
+    const fundingSource: 'PERSONAL' | 'PLATFORM_FEES' =
+      payload.funding_source === 'PLATFORM_FEES' ? 'PLATFORM_FEES' : 'PERSONAL';
+    if (fundingSource === 'PLATFORM_FEES' && !isAdmin) {
+      pushToast('error', 'Only administrators can configure Platform Fee Pool batches.');
+      return null;
+    }
+
+    const distMode: 'points' | 'percentage' =
+      payload.distribution_mode === 'percentage' ? 'percentage' : 'points';
+    const poolPoints = Number((Number(payload.pool_points) || 0).toFixed(2));
+
+    if (distMode === 'percentage') {
+      if (poolPoints <= 0) {
+        pushToast('error', 'Enter a positive total pool amount (pts) to divide by percentage.');
+        return null;
+      }
+      const totalPct = payload.recipients.reduce((s, r) => s + (Number(r.percentage) || 0), 0);
+      if (totalPct <= 0 || totalPct > 100.001) {
+        pushToast('error', `Recipient percentages must be > 0% and <= 100% (currently ${totalPct.toFixed(1)}%).`);
+        return null;
+      }
+    }
+
+    const normalizedRecipients: BatchRecipient[] = payload.recipients
+      .map((r) => {
+        const cleanUid = r.uid.trim().toUpperCase();
+        const pct = distMode === 'percentage' ? Number((Number(r.percentage) || 0).toFixed(2)) : undefined;
+        const pts =
+          distMode === 'percentage'
+            ? Number(((poolPoints * (pct || 0)) / 100).toFixed(2))
+            : Number((Number(r.points) || 0).toFixed(2));
+        return {
+          uid: cleanUid,
+          points: pts,
+          ...(pct !== undefined ? { percentage: pct } : {}),
+          ...(r.note?.trim() ? { note: r.note.trim() } : {}),
+        };
+      })
+      .filter((r) => Boolean(r.uid) && r.points > 0);
+
+    if (normalizedRecipients.length === 0) {
+      pushToast('error', 'Add at least one recipient UID with a positive allocation.');
+      return null;
+    }
+
     const id = payload.id || makeId('bat');
     const existing = batchPayments.find((b) => b.id === id);
     if (existing && existing.obligation_status === 'HasObligations' && !isAdmin) {
-      pushToast('error', 'Already-sent batches cannot be edited directly. Create a new batch or re-send.');
-      return false;
+      pushToast('error', 'Already-sent batches cannot be edited directly. Save as a new batch instead.');
+      return null;
     }
+
+    const recipientUids = Array.from(new Set(normalizedRecipients.map((r) => r.uid)));
+    const recipientAuthUids = Array.from(
+      new Set(
+        recipientUids
+          .map((u) => profiles.find((p) => p.universal_id.toUpperCase() === u)?.uid)
+          .filter((x): x is string => Boolean(x))
+      )
+    );
+
     const batch: BatchPayment = {
       id,
-      batch_code: existing?.batch_code || `BAT-${new Date().getFullYear()}-${String(batchPayments.length + 12)}`,
+      batch_code:
+        existing?.batch_code || `BAT-${new Date().getFullYear()}-${String(batchPayments.length + 12)}`,
       creator_uid: currentProfile.universal_id,
       creator_auth_uid: firebaseUser?.uid || currentProfile.uid,
       batch_name: payload.batch_name.trim(),
-      recipients: payload.recipients,
+      recipients: normalizedRecipients,
+      recipient_uids: recipientUids,
+      recipient_auth_uids: recipientAuthUids,
+      distribution_mode: distMode,
+      pool_points:
+        distMode === 'percentage'
+          ? poolPoints
+          : Number(normalizedRecipients.reduce((s, r) => s + r.points, 0).toFixed(2)),
+      funding_source: fundingSource,
       scheduled_time: payload.scheduled_time || '',
       recurrence: payload.recurrence,
       notes: payload.notes || '',
@@ -3466,6 +3569,11 @@ export const AliradaProvider: React.FC<{ children: React.ReactNode }> = ({ child
           await updateDoc(batchRef, {
             batch_name: batch.batch_name,
             recipients: batch.recipients,
+            recipient_uids: recipientUids,
+            recipient_auth_uids: recipientAuthUids,
+            distribution_mode: distMode,
+            pool_points: batch.pool_points || 0,
+            funding_source: fundingSource,
             scheduled_time: batch.scheduled_time || '',
             recurrence: batch.recurrence,
             notes: batch.notes || '',
@@ -3479,6 +3587,11 @@ export const AliradaProvider: React.FC<{ children: React.ReactNode }> = ({ child
             creator_auth_uid: firebaseUser.uid,
             batch_name: batch.batch_name,
             recipients: batch.recipients,
+            recipient_uids: recipientUids,
+            recipient_auth_uids: recipientAuthUids,
+            distribution_mode: distMode,
+            pool_points: batch.pool_points || 0,
+            funding_source: fundingSource,
             scheduled_time: batch.scheduled_time || '',
             recurrence: batch.recurrence,
             notes: batch.notes || '',
@@ -3493,26 +3606,59 @@ export const AliradaProvider: React.FC<{ children: React.ReactNode }> = ({ child
         handleFirestoreError(err, OperationType.WRITE, `batch_payments/${id}`);
       }
     }
-    pushToast('success', `Batch "${batch.batch_name}" saved.`);
-    return true;
+    pushToast('success', `Batch "${batch.batch_name}" saved for reuse.`);
+    return batch;
   };
 
-  const sendBatchPayment: AliradaContextValue['sendBatchPayment'] = async (batchId) => {
+  const sendBatchPayment: AliradaContextValue['sendBatchPayment'] = async (
+    batchId,
+    overrideBatch
+  ) => {
     if (!requireVerifiedAuth()) return false;
-    const batch = batchPayments.find((b) => b.id === batchId);
+    const batch = overrideBatch || batchPayments.find((b) => b.id === batchId);
     if (!batch) return false;
-    const totalBatchPts = batch.recipients.reduce((acc, r) => acc + r.points, 0);
-    const myBal = metricsMap[currentProfile.universal_id]?.balance ?? 0;
-    if (myBal - totalBatchPts < systemConfig.negative_points_floor) {
-      pushToast('error', 'Batch exceeds negative points floor.');
+    const isFeePool = batch.funding_source === 'PLATFORM_FEES';
+    if (isFeePool && !isAdmin) {
+      pushToast('error', 'Only administrators can disburse from Platform Fee Pool.');
       return false;
     }
+
+    const totalBatchPts = Number(
+      batch.recipients.reduce((acc, r) => acc + (Number(r.points) || 0), 0).toFixed(2)
+    );
+    if (totalBatchPts <= 0) {
+      pushToast('error', 'Batch total points must be greater than zero.');
+      return false;
+    }
+
+    if (isFeePool) {
+      if (totalBatchPts > systemConfig.total_micro_fees_collected + 0.001) {
+        pushToast(
+          'error',
+          `Platform Fee Pool has ${systemConfig.total_micro_fees_collected.toFixed(2)} pts collected (cannot transfer ${totalBatchPts.toFixed(2)} pts).`
+        );
+        return false;
+      }
+    } else {
+      const myBal = metricsMap[currentProfile.universal_id]?.balance ?? 0;
+      if (myBal - totalBatchPts < systemConfig.negative_points_floor) {
+        pushToast('error', 'Batch exceeds negative points floor.');
+        return false;
+      }
+    }
+
     const nowIso = new Date().toISOString();
-    const nextCount = batch.send_count + 1;
+    const nextCount = (batch.send_count || 0) + 1;
     setLocalBatches((prev) =>
       prev.map((b) =>
         b.id === batchId
-          ? { ...b, send_count: nextCount, last_sent_at: nowIso, status: 'Sent', obligation_status: 'HasObligations' }
+          ? {
+              ...b,
+              send_count: nextCount,
+              last_sent_at: nowIso,
+              status: 'Sent',
+              obligation_status: 'HasObligations',
+            }
           : b
       )
     );
@@ -3529,7 +3675,61 @@ export const AliradaProvider: React.FC<{ children: React.ReactNode }> = ({ child
         handleFirestoreError(err, OperationType.UPDATE, `batch_payments/${batchId}`);
       }
     }
-    pushToast('success', `Batch "${batch.batch_name}" disbursed (${totalBatchPts} pts to ${batch.recipients.length} recipients).`);
+
+    if (isFeePool) {
+      const nextFeeBalance = Math.max(
+        0,
+        Number((systemConfig.total_micro_fees_collected - totalBatchPts).toFixed(2))
+      );
+      await updateSystemConfig({ total_micro_fees_collected: nextFeeBalance });
+    }
+
+    // Notify recipients cleanly
+    for (const rec of batch.recipients) {
+      const targetProf = profiles.find(
+        (p) => p.universal_id.toUpperCase() === rec.uid.trim().toUpperCase()
+      );
+      if (targetProf && targetProf.uid) {
+        const nid = makeId('notif');
+        const notifRec: PlatformNotification = {
+          id: nid,
+          actor_uid: isFeePool ? 'PLATFORM-FEES' : currentProfile.universal_id,
+          target_uid: targetProf.universal_id,
+          target_auth_uid: targetProf.uid,
+          title: isFeePool
+            ? `Platform Fee Pool Transfer (+${rec.points} pts)`
+            : `Batch Transfer Received (+${rec.points} pts)`,
+          message: `${batch.batch_name} (${batch.batch_code}): ${rec.points} pts credited${rec.note ? ` · ${rec.note}` : ''}.`,
+          is_admin_alert: false,
+          read: false,
+          created_at: nowIso,
+        };
+        setLocalNotifications((prev) => [notifRec, ...prev]);
+        if (isLiveFirestore && firebaseUser && !SEED_IDS.profiles.has(targetProf.id)) {
+          try {
+            await setDoc(doc(db, 'notifications', nid), {
+              actor_uid: notifRec.actor_uid,
+              target_uid: notifRec.target_uid,
+              target_auth_uid: notifRec.target_auth_uid,
+              title: notifRec.title,
+              message: notifRec.message,
+              is_admin_alert: false,
+              read: false,
+              createdAt: serverTimestamp(),
+            });
+          } catch {
+            // ignore optional notification error
+          }
+        }
+      }
+    }
+
+    pushToast(
+      'success',
+      isFeePool
+        ? `Transferred ${totalBatchPts} pts from Platform Fee Pool to ${batch.recipients.length} account(s).`
+        : `Batch "${batch.batch_name}" disbursed (${totalBatchPts} pts to ${batch.recipients.length} recipients).`
+    );
     return true;
   };
 

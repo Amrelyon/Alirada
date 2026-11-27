@@ -198,7 +198,7 @@ export const GoogleTranslateControl: React.FC = () => {
   const isTranslated = Boolean(selectedLang && selectedLang !== 'en');
 
   return (
-    <div className="notranslate inline-flex items-center rounded-lg border border-stone-200 dark:border-stone-800 bg-stone-50 dark:bg-[#0B0D10] px-2 py-1 gap-1.5 min-h-[30px]">
+    <div className="notranslate inline-flex items-center rounded-lg border border-stone-200 dark:border-stone-800 bg-stone-50 dark:bg-[#0B0D10] px-2 py-1 gap-1.5 min-h-[30px] max-w-[128px] sm:max-w-[180px] overflow-hidden shrink-0">
       <Languages className="w-3.5 h-3.5 text-stone-400 shrink-0" />
       <div id="google_translate_element" className="notranslate inline-flex items-center" />
       {!widgetLoaded && (

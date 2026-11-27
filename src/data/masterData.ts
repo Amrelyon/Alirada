@@ -16,6 +16,7 @@ import {
   TransactionRef,
   BatchPayment,
 } from '../types/alirada';
+import { DEFAULT_PROJECT_STANDARDS } from './projectStandards';
 
 export interface HardshipLevel {
   level: number;
@@ -226,6 +227,7 @@ export const DEFAULT_SYSTEM_CONFIG: SystemConfigState = {
   current_cycle_name: 'Cycle 2026-Q4',
   last_cycle_archived_at: '2026-09-30T23:59:00Z',
   mock_data_cleared: false,
+  project_standards: DEFAULT_PROJECT_STANDARDS,
 };
 
 export const SEED_PROFILES: AliradaProfile[] = [
@@ -524,11 +526,15 @@ export const SEED_PROJECTS: Project[] = [
     owner_auth_uid: 'seed_uid_3',
     elected_ceo_uid: 'UID-1',
     name: 'Solar Microgrid Commons',
-    category: 'Energy & Infrastructure',
+    category: 'Energy',
+    project_type: 'Solar Plant',
     description:
       'Deploying decentralized community battery stations and rooftop solar arrays across neighborhood clinics and workshops.',
     visibility: 'Public',
-    location: 'Freiburg / Multi-Region',
+    district: 'Vauban',
+    city: 'Freiburg',
+    country: 'Germany',
+    location: 'Vauban, Freiburg, Germany',
     google_map_link: 'https://maps.google.com/?q=Freiburg',
     contact_info: 'microgrid@alirada.org',
     image_urls: ['/src/assets/images/listing_civic_academy_1795619024414.jpg'],

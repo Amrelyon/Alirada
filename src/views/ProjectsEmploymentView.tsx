@@ -21,6 +21,8 @@ import { useAlirada } from '../context/AliradaContext';
 import { ProjectHierarchyItem, ProjectInvestmentReportLink } from '../types/alirada';
 import { UserAvatar } from '../components/UserAvatar';
 import { InvestmentAnalyticsChart } from '../components/InvestmentAnalyticsChart';
+import { CommunityProjectNeedsPanel } from '../components/CommunityProjectNeedsPanel';
+import { DEFAULT_PROJECT_STANDARDS } from '../data/projectStandards';
 import {
   buildPlatformInvestmentSeries,
   buildProjectChartSeries,
@@ -68,19 +70,45 @@ export const ProjectsEmploymentView: React.FC = () => {
       setSelectedProjectId(projects[0].id);
     }
   }, [projects, selectedProjectId]);
+  const [viewMode, setViewMode] = useState<'projects' | 'needs'>('projects');
   const [subTab, setSubTab] = useState<'hierarchy' | 'investments' | 'jobs'>('hierarchy');
   const [showPlatformDiagram, setShowPlatformDiagram] = useState(true);
   const [createProjectOpen, setCreateProjectOpen] = useState(false);
 
+  const projectStandards = useMemo(
+    () =>
+      systemConfig.project_standards && systemConfig.project_standards.length > 0
+        ? systemConfig.project_standards
+        : DEFAULT_PROJECT_STANDARDS,
+    [systemConfig.project_standards]
+  );
+
+  const standardCategories = useMemo(
+    () => Array.from(new Set(projectStandards.map((s) => s.category))),
+    [projectStandards]
+  );
+
   // Create Project Form
   const [pName, setPName] = useState('');
-  const [pCat, setPCat] = useState(systemConfig.custom_categories[0] || 'Energy & Infrastructure');
+  const [pCat, setPCat] = useState(standardCategories[0] || 'Energy');
+  const [pType, setPType] = useState(
+    projectStandards.find((s) => s.category === (standardCategories[0] || 'Energy'))?.project_type ||
+      'Solar Plant'
+  );
   const [pDesc, setPDesc] = useState('');
   const [pVis, setPVis] = useState<'Public' | 'Private'>('Public');
+  const [pDistrict, setPDistrict] = useState('');
+  const [pCity, setPCity] = useState('');
+  const [pCountry, setPCountry] = useState('');
   const [pLoc, setPLoc] = useState('');
   const [pGoal, setPGoal] = useState(0);
   const [pBudgetDoc, setPBudgetDoc] = useState('');
   const [pPresUrl, setPPresUrl] = useState('');
+
+  const availableProjectTypesForCat = useMemo(() => {
+    const matched = projectStandards.filter((s) => s.category === pCat);
+    return matched.length > 0 ? matched : projectStandards;
+  }, [projectStandards, pCat]);
 
   // Project Investment & Shareholder Report Modals
   const [investModalOpen, setInvestModalOpen] = useState(false);
@@ -250,8 +278,12 @@ export const ProjectsEmploymentView: React.FC = () => {
     const ok = await createProject({
       name: pName,
       category: pCat,
+      project_type: pType,
       description: pDesc,
       visibility: pVis,
+      district: pDistrict,
+      city: pCity,
+      country: pCountry,
       location: pLoc,
       investment_goal_points: Number(pGoal) || undefined,
       budget_doc_url: pBudgetDoc || undefined,
@@ -261,10 +293,32 @@ export const ProjectsEmploymentView: React.FC = () => {
       setCreateProjectOpen(false);
       setPName('');
       setPDesc('');
+      setPDistrict('');
+      setPCity('');
+      setPCountry('');
+      setPLoc('');
       setPGoal(0);
       setPBudgetDoc('');
       setPPresUrl('');
     }
+  };
+
+  const handleCreateNeededProject = (preset: {
+    category: string;
+    project_type: string;
+    district?: string;
+    city?: string;
+    country?: string;
+  }) => {
+    setPCat(preset.category);
+    setPType(preset.project_type);
+    setPDistrict(preset.district || '');
+    setPCity(preset.city || '');
+    setPCountry(preset.country || '');
+    setPName(
+      `${preset.project_type}${preset.district ? ` (${preset.district})` : preset.city ? ` (${preset.city})` : ''}`
+    );
+    setCreateProjectOpen(true);
   };
 
   const openConfigModal = () => {
@@ -413,14 +467,40 @@ export const ProjectsEmploymentView: React.FC = () => {
         </div>
 
         <div className="flex items-center gap-2 flex-wrap">
-          <button
-            type="button"
-            onClick={() => setShowPlatformDiagram((v) => !v)}
-            className="px-3 py-2 text-xs font-medium rounded-lg border border-stone-300 dark:border-stone-700 hover:bg-stone-100 dark:hover:bg-stone-800 inline-flex items-center gap-1.5 whitespace-nowrap"
-          >
-            <TrendingUp className="w-3.5 h-3.5 text-[#B88B1E] dark:text-[#D4AF37]" />
-            {showPlatformDiagram ? 'Hide Platform Diagram' : 'Show Platform Diagram'}
-          </button>
+          <div className="flex items-center gap-1 p-1 bg-stone-100 dark:bg-[#12151B] border border-stone-200 dark:border-stone-800 rounded-lg">
+            <button
+              type="button"
+              onClick={() => setViewMode('projects')}
+              className={`px-3 py-1.5 text-xs font-medium rounded-md transition-colors whitespace-nowrap ${
+                viewMode === 'projects'
+                  ? 'bg-white dark:bg-[#1D222C] text-stone-900 dark:text-stone-100 shadow-sm'
+                  : 'text-stone-600 dark:text-stone-400'
+              }`}
+            >
+              Projects ({projects.length})
+            </button>
+            <button
+              type="button"
+              onClick={() => setViewMode('needs')}
+              className={`px-3 py-1.5 text-xs font-medium rounded-md transition-colors whitespace-nowrap ${
+                viewMode === 'needs'
+                  ? 'bg-white dark:bg-[#1D222C] text-stone-900 dark:text-stone-100 shadow-sm'
+                  : 'text-stone-600 dark:text-stone-400'
+              }`}
+            >
+              Community Needs &amp; Priorities
+            </button>
+          </div>
+          {viewMode === 'projects' && (
+            <button
+              type="button"
+              onClick={() => setShowPlatformDiagram((v) => !v)}
+              className="px-3 py-2 text-xs font-medium rounded-lg border border-stone-300 dark:border-stone-700 hover:bg-stone-100 dark:hover:bg-stone-800 inline-flex items-center gap-1.5 whitespace-nowrap"
+            >
+              <TrendingUp className="w-3.5 h-3.5 text-[#B88B1E] dark:text-[#D4AF37]" />
+              {showPlatformDiagram ? 'Hide Platform Diagram' : 'Show Platform Diagram'}
+            </button>
+          )}
           <button
             type="button"
             onClick={() => setCreateProjectOpen(true)}
@@ -432,8 +512,16 @@ export const ProjectsEmploymentView: React.FC = () => {
         </div>
       </div>
 
+      {viewMode === 'needs' && (
+        <CommunityProjectNeedsPanel
+          standards={projectStandards}
+          projects={projects}
+          onCreateNeededProject={handleCreateNeededProject}
+        />
+      )}
+
       {/* Platform-Wide Accumulated Investment & Income Diagram */}
-      {showPlatformDiagram && (
+      {viewMode === 'projects' && showPlatformDiagram && (
         <div className="space-y-3">
           <div className="grid grid-cols-2 lg:grid-cols-4 gap-3">
             <div className="bg-white dark:bg-[#12151B] border border-stone-200 dark:border-stone-800 rounded-xl p-4">
@@ -472,6 +560,7 @@ export const ProjectsEmploymentView: React.FC = () => {
       )}
 
       {/* Project Selector Strip */}
+      {viewMode === 'projects' && (
       <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
         {projects.map((prj) => {
           const isSelected = activeProject?.id === prj.id;
@@ -530,8 +619,9 @@ export const ProjectsEmploymentView: React.FC = () => {
           );
         })}
       </div>
+      )}
 
-      {activeProject && (
+      {viewMode === 'projects' && activeProject && (
         <div className="bg-white dark:bg-[#12151B] border border-stone-200 dark:border-stone-800 rounded-xl p-6 space-y-6">
           <div className="flex flex-col md:flex-row md:items-center justify-between gap-4 border-b border-stone-200 dark:border-stone-800 pb-4">
             <div className="space-y-1">
@@ -562,6 +652,8 @@ export const ProjectsEmploymentView: React.FC = () => {
                   {activeProject.elected_ceo_uid || activeProject.owner_uid}
                 </button>{' '}
                 · {activeProject.category}
+                {activeProject.project_type ? ` · ${activeProject.project_type}` : ''}
+                {activeProject.location ? ` · ${activeProject.location}` : ''}
               </p>
             </div>
 
@@ -1391,15 +1483,79 @@ export const ProjectsEmploymentView: React.FC = () => {
                 onChange={(e) => setPName(e.target.value)}
                 className="w-full px-3 py-2 text-sm rounded-lg border border-stone-300 dark:border-stone-700 bg-stone-50 dark:bg-[#0B0D10]"
               />
+              <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
+                <div>
+                  <label className="block font-medium mb-1">Level-1 Category</label>
+                  <select
+                    value={pCat}
+                    onChange={(e) => {
+                      const nextCat = e.target.value;
+                      setPCat(nextCat);
+                      const firstMatch = projectStandards.find((s) => s.category === nextCat);
+                      if (firstMatch) setPType(firstMatch.project_type);
+                    }}
+                    className="w-full px-3 py-2 text-sm rounded-lg border border-stone-300 dark:border-stone-700 bg-stone-50 dark:bg-[#0B0D10]"
+                  >
+                    {standardCategories.map((cat) => (
+                      <option key={cat} value={cat}>
+                        {cat}
+                      </option>
+                    ))}
+                  </select>
+                </div>
+                <div>
+                  <label className="block font-medium mb-1">Level-2 Project Type</label>
+                  <select
+                    value={pType}
+                    onChange={(e) => setPType(e.target.value)}
+                    className="w-full px-3 py-2 text-sm rounded-lg border border-stone-300 dark:border-stone-700 bg-stone-50 dark:bg-[#0B0D10]"
+                  >
+                    {availableProjectTypesForCat.map((item) => (
+                      <option key={item.id} value={item.project_type}>
+                        {item.project_type} (Min {item.min_per_district}/dist · {item.employees_per_project} emp)
+                      </option>
+                    ))}
+                  </select>
+                </div>
+              </div>
+
+              <div className="grid grid-cols-3 gap-2">
+                <div>
+                  <label className="block font-medium mb-1">District</label>
+                  <input
+                    type="text"
+                    required
+                    placeholder="e.g. Vauban"
+                    value={pDistrict}
+                    onChange={(e) => setPDistrict(e.target.value)}
+                    className="w-full px-2.5 py-2 text-sm rounded-lg border border-stone-300 dark:border-stone-700 bg-stone-50 dark:bg-[#0B0D10]"
+                  />
+                </div>
+                <div>
+                  <label className="block font-medium mb-1">City</label>
+                  <input
+                    type="text"
+                    required
+                    placeholder="e.g. Freiburg"
+                    value={pCity}
+                    onChange={(e) => setPCity(e.target.value)}
+                    className="w-full px-2.5 py-2 text-sm rounded-lg border border-stone-300 dark:border-stone-700 bg-stone-50 dark:bg-[#0B0D10]"
+                  />
+                </div>
+                <div>
+                  <label className="block font-medium mb-1">Country</label>
+                  <input
+                    type="text"
+                    required
+                    placeholder="e.g. Germany"
+                    value={pCountry}
+                    onChange={(e) => setPCountry(e.target.value)}
+                    className="w-full px-2.5 py-2 text-sm rounded-lg border border-stone-300 dark:border-stone-700 bg-stone-50 dark:bg-[#0B0D10]"
+                  />
+                </div>
+              </div>
+
               <div className="grid grid-cols-2 gap-3">
-                <input
-                  type="text"
-                  required
-                  placeholder="Category"
-                  value={pCat}
-                  onChange={(e) => setPCat(e.target.value)}
-                  className="w-full px-3 py-2 text-sm rounded-lg border border-stone-300 dark:border-stone-700 bg-stone-50 dark:bg-[#0B0D10]"
-                />
                 <select
                   value={pVis}
                   onChange={(e) => setPVis(e.target.value as 'Public' | 'Private')}
@@ -1408,14 +1564,14 @@ export const ProjectsEmploymentView: React.FC = () => {
                   <option value="Public">Public</option>
                   <option value="Private">Private (Request Join)</option>
                 </select>
+                <input
+                  type="text"
+                  placeholder="Street / Address Notes (Optional)"
+                  value={pLoc}
+                  onChange={(e) => setPLoc(e.target.value)}
+                  className="w-full px-3 py-2 text-sm rounded-lg border border-stone-300 dark:border-stone-700 bg-stone-50 dark:bg-[#0B0D10]"
+                />
               </div>
-              <input
-                type="text"
-                placeholder="Location (Optional)"
-                value={pLoc}
-                onChange={(e) => setPLoc(e.target.value)}
-                className="w-full px-3 py-2 text-sm rounded-lg border border-stone-300 dark:border-stone-700 bg-stone-50 dark:bg-[#0B0D10]"
-              />
               <textarea
                 rows={3}
                 required

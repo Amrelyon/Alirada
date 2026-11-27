@@ -172,7 +172,12 @@ export function computeUserLedgerMetrics(
 
   const batchOut = round2(
     batchPayments
-      .filter((b) => normUid(b.creator_uid) === uidNorm && (Number(b.send_count) || 0) > 0)
+      .filter(
+        (b) =>
+          b.funding_source !== 'PLATFORM_FEES' &&
+          normUid(b.creator_uid) === uidNorm &&
+          (Number(b.send_count) || 0) > 0
+      )
       .reduce(
         (acc, b) =>
           acc +
@@ -893,6 +898,7 @@ export function buildUidUnifiedTransactions(
   }
 
   for (const b of data.batchPayments) {
+    const isFeePool = b.funding_source === 'PLATFORM_FEES';
     const totalBatch =
       b.recipients.reduce((acc, r) => acc + (Number(r.points) || 0), 0) * Math.max(1, b.send_count);
     if (normUid(b.creator_uid) === normalized && b.send_count > 0) {
@@ -903,9 +909,9 @@ export function buildUidUnifiedTransactions(
         role: 'Issuer / Sender',
         counterpartyUid: `${b.recipients.length} UIDs`,
         amount: round2(totalBatch),
-        direction: '-',
-        status: `${b.status} (${b.send_count}×)`,
-        summary: b.batch_name,
+        direction: isFeePool ? 'Escrow' : '-',
+        status: `${isFeePool ? 'Fee Pool · ' : ''}${b.status} (${b.send_count}×)`,
+        summary: isFeePool ? `Platform Fee Pool: ${b.batch_name}` : b.batch_name,
         created_at: b.last_sent_at || b.created_at,
       });
     }
@@ -917,10 +923,10 @@ export function buildUidUnifiedTransactions(
             code: b.batch_code,
             category: 'Batch',
             role: 'Receiver / Counterparty',
-            counterpartyUid: b.creator_uid,
+            counterpartyUid: isFeePool ? 'PLATFORM-FEES' : b.creator_uid,
             amount: round2((Number(rec.points) || 0) * b.send_count),
             direction: '+',
-            status: `${b.status} (${b.send_count}×)`,
+            status: `${isFeePool ? 'Fee Pool · ' : ''}${b.status} (${b.send_count}×)`,
             summary: `${b.batch_name}${rec.note ? ` · ${rec.note}` : ''}`,
             created_at: b.last_sent_at || b.created_at,
           });

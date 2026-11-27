@@ -57,6 +57,18 @@ html,
 body {
   top: 0px !important;
   position: static !important;
+  margin: 0 !important;
+  max-width: 100%;
+  overflow-x: clip;
+}
+
+.mobile-bottom-nav {
+  position: fixed;
+  bottom: 0;
+  left: 0;
+  right: 0;
+  width: 100%;
+  padding-bottom: env(safe-area-inset-bottom, 0px);
 }
 
 /* Cleanly style embedded Google Translate language select */
